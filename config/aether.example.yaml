@@ -1,0 +1,42 @@
+# AETHER A&D — EXAMPLE configuration.
+#
+# The real IONIC/competition environment is UNKNOWN until the organizer briefing.
+# Every value below is a PLACEHOLDER. Copy this file to config/aether.yaml and fill in
+# official values. AETHER FAILS CLOSED: with enforce=true and no real targets, nothing runs.
+#
+#   cp config/aether.example.yaml config/aether.yaml
+#   # edit config/aether.yaml with official scope
+#   aether config validate
+
+engine:
+  max_concurrency: 8        # bounded concurrency (8GB RAM dev box: keep modest)
+  default_timeout: 30.0     # seconds, per module
+  state_db: runtime/aether.sqlite
+  log_file: runtime/aether.log
+  log_level: INFO
+
+scope:
+  enforce: true             # NEVER set false during competition
+  targets:
+    # --- Opponent services we are AUTHORIZED to attack (fill from official scope) ---
+    - name: opponent-web-PLACEHOLDER
+      host: CHANGEME         # e.g. 10.60.3.1  (placeholder -> config validate will fail)
+      ports: [80, 443]
+      kind: web
+      owner: opponent
+    # --- Our own services we DEFEND ---
+    - name: our-web-PLACEHOLDER
+      host: CHANGEME         # e.g. 10.60.OURTEAM.1
+      ports: [80]
+      kind: web
+      owner: self
+
+flags:
+  # Flag format is UNKNOWN until briefing. Example only — replace with official regex.
+  pattern: null             # e.g. "IONIC\\{[A-Za-z0-9_]+\\}"
+  auto_submit: false        # MUST stay false — AETHER never auto-submits.
+
+scoring:
+  tick_seconds: null        # official round/tick length, once known
+  submit_endpoint: null     # operator submits manually; this is informational only
+  scoreboard_endpoint: null

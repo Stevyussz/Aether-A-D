@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# AETHER runtime state (never commit flags or live state)
+*.sqlite
+*.sqlite3
+*.db
+state/
+runtime/
+*.log
+secrets/
+config/local.*.yaml
+config/*.secret.yaml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
