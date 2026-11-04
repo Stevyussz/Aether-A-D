@@ -43,7 +43,9 @@ class FlagConfig(BaseModel):
 
 class ScoringConfig(BaseModel):
     tick_seconds: int | None = None
-    submit_endpoint: str | None = None
+    epoch: float | None = None  # unix time of tick 0 start, if known
+    expiry_ticks: int | None = None  # flag acceptance window, in ticks
+    submit_endpoint: str | None = None  # informational only — operator submits manually
     scoreboard_endpoint: str | None = None
 
 

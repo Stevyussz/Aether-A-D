@@ -21,6 +21,7 @@ from .flags.extractor import FlagExtractor
 from .flags.inbox import FlagInbox, IngestOutcome
 from .flags.validator import FlagValidator
 from .verification.verifier import ExploitVerifier, VerificationReport
+from ..scoring.timing import TickClock
 
 log = get_logger("attack_engine")
 
@@ -44,6 +45,13 @@ class AttackEngine:
         self._extractor = FlagExtractor(pattern)
         self._validator = FlagValidator(pattern)
         self._verifier = ExploitVerifier(self._validator)
+        self._clock = TickClock(orch.config.scoring.tick_seconds, orch.config.scoring.epoch)
+
+    def _current_tick(self, context_tick: str | None) -> str | None:
+        """Prefer an explicit context tick; else stamp the current tick if configured."""
+        if context_tick:
+            return context_tick
+        return self._clock.tick_label()
 
     async def recon(self, module: Module, context: RunContext) -> ModuleResult:
         """Run a recon/assessment module (scope enforced by the orchestrator)."""
@@ -74,6 +82,7 @@ class AttackEngine:
         # 2. Scope-enforced, timeout-bounded execution.
         result = await self.orch.run_module(plugin, context)
 
+        tick = self._current_tick(context.tick)
         # 3. Extract any flags from genuine output not already attached by the plugin.
         if result.state == TaskState.SUCCEEDED:
             existing = {f.value for f in result.flags}
@@ -85,7 +94,7 @@ class AttackEngine:
                             target=context.target_host or "unknown",
                             service=context.service,
                             module=plugin.identifier,
-                            tick=context.tick,
+                            tick=tick,
                         )
                     )
 
@@ -99,7 +108,7 @@ class AttackEngine:
             # ensure provenance fields are set
             flag.target = flag.target or (context.target_host or "unknown")
             flag.module = flag.module or plugin.identifier
-            flag.tick = flag.tick or context.tick
+            flag.tick = flag.tick or tick
             ingested.append(await self.inbox.ingest(flag))
 
         return ExploitRun(result=result, verification=verification, ingested=ingested)

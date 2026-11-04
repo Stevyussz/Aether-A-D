@@ -35,6 +35,7 @@ defense_app = typer.Typer(help="Defense engine status.", no_args_is_help=True)
 attack_app = typer.Typer(help="Attack engine status.", no_args_is_help=True)
 flags_app = typer.Typer(help="Manual flag inbox (operator submits — AETHER never does).",
                         no_args_is_help=True)
+scoring_app = typer.Typer(help="Scoring & competition timing.", no_args_is_help=True)
 
 app.add_typer(system_app, name="system")
 app.add_typer(config_app, name="config")
@@ -43,6 +44,7 @@ app.add_typer(modules_app, name="modules")
 app.add_typer(defense_app, name="defense")
 app.add_typer(attack_app, name="attack")
 app.add_typer(flags_app, name="flags")
+app.add_typer(scoring_app, name="scoring")
 
 
 def _build_loader() -> ModuleLoader:
@@ -447,6 +449,53 @@ def flags_mark_submitted(
             await state.close()
 
     asyncio.run(_run())
+
+
+@scoring_app.command("show")
+def scoring_show(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+) -> None:
+    """Show tick/round timing and recorded score history (if any)."""
+    import asyncio
+
+    from ..scoring.timing import TickClock
+    from ..scoring.tracker import ScoreTracker
+    from ..core.state_manager import StateManager
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    clock = TickClock(cfg.scoring.tick_seconds, cfg.scoring.epoch)
+    table = Table(title="Scoring / timing")
+    table.add_column("Metric")
+    table.add_column("Value")
+    if clock.configured:
+        info = clock.info()
+        table.add_row("tick length", f"{cfg.scoring.tick_seconds}s")
+        table.add_row("current tick", str(info.tick))
+        table.add_row("seconds to next tick", f"{info.seconds_to_next:g}")
+    else:
+        table.add_row("tick length", "[yellow]unconfigured[/]")
+    table.add_row("flag expiry (ticks)", str(cfg.scoring.expiry_ticks or "unconfigured"))
+    table.add_row("scoreboard endpoint", cfg.scoring.scoreboard_endpoint or "unconfigured")
+    console.print(table)
+
+    async def _hist():
+        state = StateManager(cfg.engine.state_db)
+        await state.open()
+        try:
+            latest = await ScoreTracker(state).latest()
+            if latest:
+                console.print(f"latest snapshot: {latest}")
+            else:
+                console.print("[dim]no score history recorded yet[/]")
+        finally:
+            await state.close()
+
+    asyncio.run(_hist())
 
 
 def _render_flag_table(rows: list[dict], title: str, show_values: bool) -> None:
