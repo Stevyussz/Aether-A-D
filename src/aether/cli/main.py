@@ -31,11 +31,13 @@ system_app = typer.Typer(help="System / environment checks.", no_args_is_help=Tr
 config_app = typer.Typer(help="Configuration management.", no_args_is_help=True)
 scope_app = typer.Typer(help="Authorized-scope inspection.", no_args_is_help=True)
 modules_app = typer.Typer(help="Module/plugin inspection and self-test.", no_args_is_help=True)
+defense_app = typer.Typer(help="Defense engine status.", no_args_is_help=True)
 
 app.add_typer(system_app, name="system")
 app.add_typer(config_app, name="config")
 app.add_typer(scope_app, name="scope")
 app.add_typer(modules_app, name="modules")
+app.add_typer(defense_app, name="defense")
 
 
 def _build_loader() -> ModuleLoader:
@@ -240,6 +242,46 @@ def modules_test() -> None:
             console.print(f"[red]✗ {m.meta.identifier}: {exc}[/]")
     if failures:
         raise typer.Exit(1)
+
+
+@defense_app.command("status")
+def defense_status(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+) -> None:
+    """Show defense engine status (monitored services, watched paths, last incidents)."""
+    import asyncio
+
+    from ..core.orchestrator import Orchestrator
+    from ..defense.engine import DefenseEngine
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            engine = DefenseEngine(orch)
+            # Watch any self-owned targets that name a local path in notes (best-effort).
+            st = engine.status
+            table = Table(title="Defense status")
+            table.add_column("Metric")
+            table.add_column("Value")
+            table.add_row("services monitored", str(st.services_monitored))
+            table.add_row("integrity paths watched", str(st.integrity_watched))
+            table.add_row("last incidents", str(len(st.last_incidents)) or "0")
+            console.print(table)
+            console.print(
+                "[dim]Live probes/paths are registered at runtime by adapters once "
+                "official scope is configured.[/]"
+            )
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

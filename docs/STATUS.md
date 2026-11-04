@@ -7,7 +7,7 @@ Tracks implemented phases (blueprint §7). Each phase: implemented → tested �
 | 0 | Environment inspection, repo init, src-layout, tooling (uv/pytest) | ✅ done |
 | 1 | Core engine: orchestrator, event bus, scheduler, guards, config, state, logger, plugin/loader | ✅ done |
 | 2 | CLI (Typer+Rich), config/state/event wiring | ✅ done |
-| 3 | Defense: monitoring, integrity, log analysis, backup, patching, recovery | ⏳ |
+| 3 | Defense: monitoring, integrity, log analysis, backup, patching, recovery | ✅ done |
 | 4 | Attack: plugin iface, assessment modules, flag extraction/validation, manual Flag Inbox | ⏳ |
 | 5 | Adapters: web/http, linux/ssh, docker | ⏳ |
 | 6 | Scoring integration & competition timing | ⏳ |
