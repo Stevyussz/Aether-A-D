@@ -9,7 +9,7 @@ Tracks implemented phases (blueprint §7). Each phase: implemented → tested �
 | 2 | CLI (Typer+Rich), config/state/event wiring | ✅ done |
 | 3 | Defense: monitoring, integrity, log analysis, backup, patching, recovery | ✅ done |
 | 4 | Attack: plugin iface, assessment modules, flag extraction/validation, manual Flag Inbox | ✅ done |
-| 5 | Adapters: web/http, linux/ssh, docker | ⏳ |
+| 5 | Adapters: web/http, linux/ssh, docker | ✅ done |
 | 6 | Scoring integration & competition timing | ⏳ |
 | 7 | Integration / regression / stress / endurance testing | ⏳ |
 | 8 | Competition release candidate | ⏳ |
