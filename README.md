@@ -26,8 +26,20 @@ continuous objectives during an authorized Attack & Defense competition:
 
 ## Status
 
-Built incrementally in phases (see `BLUEPRINT.md` §7). Current implemented phases are tracked
-in `docs/STATUS.md`.
+**Release candidate.** All 8 build phases implemented; 138 automated tests passing; 13/14
+acceptance criteria verified in the local lab (the last depends on the official briefing and
+is deliberately left pending). See:
+
+- `docs/STATUS.md` — per-phase build status
+- `docs/RUNBOOK.md` — operator runbook (both team members)
+- `docs/ACCEPTANCE.md` — acceptance-criteria evidence map (BLUEPRINT §9)
+- `docs/IONIC_INTEGRATION.md` — what to configure when the official briefing arrives
+
+Self-checks: `aether lab test`, `python scripts/acceptance_check.py`,
+`python scripts/measure_resources.py`, `pytest`.
+
+> Not declared competition-ready until the official environment is integrated and acceptance
+> is re-run against it (blueprint final directive).
 
 ## Quick start
 
