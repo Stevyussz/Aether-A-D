@@ -29,3 +29,6 @@ config/*.secret.yaml
 .DS_Store
 .idea/
 .vscode/
+
+# Operator config with real scope must never be committed
+config/aether.yaml
