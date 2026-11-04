@@ -11,7 +11,7 @@ Tracks implemented phases (blueprint §7). Each phase: implemented → tested �
 | 4 | Attack: plugin iface, assessment modules, flag extraction/validation, manual Flag Inbox | ✅ done |
 | 5 | Adapters: web/http, linux/ssh, docker | ✅ done |
 | 6 | Scoring integration & competition timing | ✅ done |
-| 7 | Integration / regression / stress / endurance testing | ⏳ |
+| 7 | Integration / regression / stress / endurance testing | ✅ done |
 | 8 | Competition release candidate | ⏳ |
 
 ## Environment (Phase 0 findings)
@@ -36,3 +36,26 @@ Tracks implemented phases (blueprint §7). Each phase: implemented → tested �
 - `orchestrator.py` — lifecycle + scope-enforced module execution.
 
 Tests: `tests/unit/` (44 tests passing).
+
+## Phase 7 — testing & measured resources
+
+Test suites: unit, integration, regression (incl. failure simulation), stress/endurance.
+Covers attack+defense coexistence, adapter integration, flag inbox, monitoring pipeline,
+patch verification, invalid config, duplicate flags, timeout handling, unexpected responses,
+network interruption, service crash, exploit failure, invalid flags, patch + rollback +
+rollback-failure, database interruption.
+
+Measured resource consumption (real, `scripts/measure_resources.py`, 100 concurrent
+attack+defense iterations, this 4-core / 8 GiB box):
+
+- wall: ~3.1 s total, ~31 ms / iteration
+- process RSS: ~55 MB
+- Python heap peak: ~2.8 MB
+
+Lightweight target met. Numbers are measured, not assumed.
+
+## Remaining CLI commands implemented
+
+`report generate` (safe Markdown report, flag values hidden by default), `lab test`
+(isolated end-to-end self-test), `monitor start`/`monitor stop` (foreground sweep loop with
+stop-flag file; `--once`/`--duration`).

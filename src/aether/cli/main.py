@@ -36,6 +36,11 @@ attack_app = typer.Typer(help="Attack engine status.", no_args_is_help=True)
 flags_app = typer.Typer(help="Manual flag inbox (operator submits — AETHER never does).",
                         no_args_is_help=True)
 scoring_app = typer.Typer(help="Scoring & competition timing.", no_args_is_help=True)
+monitor_app = typer.Typer(help="Defense monitoring loop.", no_args_is_help=True)
+report_app = typer.Typer(help="Operator reports.", no_args_is_help=True)
+lab_app = typer.Typer(help="Isolated local lab self-test.", no_args_is_help=True)
+
+_MONITOR_STOP_FLAG = Path("runtime/monitor.stop")
 
 app.add_typer(system_app, name="system")
 app.add_typer(config_app, name="config")
@@ -45,6 +50,9 @@ app.add_typer(defense_app, name="defense")
 app.add_typer(attack_app, name="attack")
 app.add_typer(flags_app, name="flags")
 app.add_typer(scoring_app, name="scoring")
+app.add_typer(monitor_app, name="monitor")
+app.add_typer(report_app, name="report")
+app.add_typer(lab_app, name="lab")
 
 
 def _build_loader() -> ModuleLoader:
@@ -496,6 +504,180 @@ def scoring_show(
             await state.close()
 
     asyncio.run(_hist())
+
+
+@report_app.command("generate")
+def report_generate(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    include_values: bool = typer.Option(False, "--include-flag-values",
+                                        help="Include raw flag values (sensitive!)."),
+) -> None:
+    """Generate a Markdown operator report under runtime/reports/."""
+    import asyncio
+
+    from ..core.state_manager import StateManager
+    from ..reporting.report import write_report
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run():
+        state = StateManager(cfg.engine.state_db)
+        await state.open()
+        try:
+            path = await write_report(cfg, state, include_flag_values=include_values)
+            console.print(f"[green]✓ report written:[/] {path}")
+        finally:
+            await state.close()
+
+    asyncio.run(_run())
+
+
+@monitor_app.command("start")
+def monitor_start(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    interval: float = typer.Option(10.0, "--interval", help="Seconds between sweeps."),
+    duration: float = typer.Option(0.0, "--duration",
+                                   help="Total seconds to run (0 = until stopped)."),
+    once: bool = typer.Option(False, "--once", help="Run a single sweep and exit."),
+) -> None:
+    """Run the defense monitoring loop (foreground). Stop with Ctrl-C or `aether monitor stop`."""
+    import asyncio
+
+    from ..core.orchestrator import Orchestrator
+    from ..defense.engine import DefenseEngine
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    Path("runtime").mkdir(exist_ok=True)
+    if _MONITOR_STOP_FLAG.exists():
+        _MONITOR_STOP_FLAG.unlink()
+
+    async def _run():
+        import time
+
+        orch = Orchestrator(cfg)
+        await orch.start()
+        engine = DefenseEngine(orch)
+        # Watch any self-owned target whose notes name a local path.
+        for t in cfg.scope.targets:
+            if t.owner == "self" and t.notes and Path(t.notes).exists():
+                engine.watch_path(t.name, t.notes)
+        start = time.time()
+        sweeps = 0
+        try:
+            while True:
+                incidents = await engine.sweep()
+                sweeps += 1
+                if incidents:
+                    for inc in incidents:
+                        console.print(f"[red]INCIDENT[/] {inc.severity.value}: {inc.summary}")
+                else:
+                    console.print(f"[green]sweep {sweeps}: clean[/]")
+                if once:
+                    break
+                if duration and (time.time() - start) >= duration:
+                    break
+                if _MONITOR_STOP_FLAG.exists():
+                    console.print("[yellow]stop flag detected — shutting down[/]")
+                    _MONITOR_STOP_FLAG.unlink()
+                    break
+                await asyncio.sleep(interval)
+        finally:
+            await orch.shutdown()
+        console.print(f"monitor finished after {sweeps} sweep(s)")
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]monitor interrupted by operator[/]")
+
+
+@monitor_app.command("stop")
+def monitor_stop() -> None:
+    """Signal a running `monitor start` loop to stop at its next sweep."""
+    Path("runtime").mkdir(exist_ok=True)
+    _MONITOR_STOP_FLAG.write_text("stop", encoding="utf-8")
+    console.print("[green]✓ stop signal written (runtime/monitor.stop)[/]")
+
+
+@lab_app.command("test")
+def lab_test(
+    flag: str = typer.Option("CTF{aether_lab_selftest}", "--flag", help="Lab flag value."),
+) -> None:
+    """Self-test: spin up an isolated local lab service and run the full attack pipeline.
+
+    Proves end-to-end that a genuine flag flows recon->exploit->verify->MANUAL inbox,
+    validated and PENDING, without touching any external infrastructure.
+    """
+    import asyncio
+    import sys as _sys
+
+    lab_dir = Path(__file__).resolve().parents[3] / "lab" / "web"
+    _sys.path.insert(0, str(lab_dir))
+    try:
+        from flag_service import LabWebService  # type: ignore
+    except ImportError:
+        err_console.print("[red]✗ lab service not found[/]")
+        raise typer.Exit(1)
+
+    from ..attack.engine import AttackEngine
+    from ..attack.exploits.lab_http_flag import LabHttpFlagExploit
+    from ..attack.flags.inbox import FlagInbox, render_detection
+    from ..attack.flags.validator import FlagValidator
+    from ..core.config_manager import (
+        AetherConfig,
+        EngineConfig,
+        FlagConfig,
+        ScopeConfig,
+    )
+    from ..core.models import Target
+    from ..core.orchestrator import Orchestrator
+    from ..core.plugin import RunContext
+
+    pattern = r"CTF\{[^}]+\}"
+    svc = LabWebService(flag, host="127.0.0.1", port=0).start()
+
+    async def _run():
+        cfg = AetherConfig(
+            engine=EngineConfig(state_db=":memory:", log_file=None, log_level="WARNING"),
+            scope=ScopeConfig(
+                enforce=True,
+                targets=[Target(name="lab", host="127.0.0.1", ports=(svc.port,),
+                                kind="web", owner="opponent")],
+            ),
+            flags=FlagConfig(pattern=pattern),
+        )
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            inbox = FlagInbox(orch.state, FlagValidator(pattern), events=orch.events)
+            engine = AttackEngine(orch, inbox)
+            console.print(f"[cyan]lab service up on 127.0.0.1:{svc.port}[/]")
+            run = await engine.run_exploit(
+                LabHttpFlagExploit(),
+                RunContext(target_host="127.0.0.1", target_port=svc.port, service="web"),
+            )
+            if run.confirmed and run.ingested:
+                console.print("[green]✓ end-to-end pipeline OK[/]")
+                console.print(render_detection(run.ingested[0].flag))
+            else:
+                console.print(f"[red]✗ pipeline did not confirm: {run.verification.reason}[/]")
+                raise typer.Exit(1)
+        finally:
+            await orch.shutdown()
+
+    try:
+        asyncio.run(_run())
+    finally:
+        svc.stop()
 
 
 def _render_flag_table(rows: list[dict], title: str, show_values: bool) -> None:
