@@ -32,8 +32,11 @@ class Module(abc.ABC):
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        # Enforce that concrete subclasses declare metadata (no silent/anonymous modules).
-        if not getattr(cls, "__abstractmethods__", None):
+        # Enforce that *concrete* subclasses declare metadata (no silent/anonymous
+        # modules). A class is concrete here iff its `run` is not still abstract.
+        # (__abstractmethods__ is not yet populated at __init_subclass__ time.)
+        run = cls.__dict__.get("run") or getattr(cls, "run", None)
+        if run is not None and not getattr(run, "__isabstractmethod__", False):
             if not hasattr(cls, "meta") or not isinstance(getattr(cls, "meta"), ModuleMeta):
                 raise TypeError(f"{cls.__name__} must define a class-level `meta: ModuleMeta`")
 

@@ -32,12 +32,17 @@ config_app = typer.Typer(help="Configuration management.", no_args_is_help=True)
 scope_app = typer.Typer(help="Authorized-scope inspection.", no_args_is_help=True)
 modules_app = typer.Typer(help="Module/plugin inspection and self-test.", no_args_is_help=True)
 defense_app = typer.Typer(help="Defense engine status.", no_args_is_help=True)
+attack_app = typer.Typer(help="Attack engine status.", no_args_is_help=True)
+flags_app = typer.Typer(help="Manual flag inbox (operator submits — AETHER never does).",
+                        no_args_is_help=True)
 
 app.add_typer(system_app, name="system")
 app.add_typer(config_app, name="config")
 app.add_typer(scope_app, name="scope")
 app.add_typer(modules_app, name="modules")
 app.add_typer(defense_app, name="defense")
+app.add_typer(attack_app, name="attack")
+app.add_typer(flags_app, name="flags")
 
 
 def _build_loader() -> ModuleLoader:
@@ -282,6 +287,193 @@ def defense_status(
             await orch.shutdown()
 
     asyncio.run(_run())
+
+
+def _open_state_and_inbox(cfg):
+    """Build a StateManager + FlagInbox for CLI flag commands (async)."""
+    from ..attack.flags.inbox import FlagInbox
+    from ..attack.flags.validator import FlagValidator
+    from ..core.state_manager import StateManager
+
+    state = StateManager(cfg.engine.state_db)
+    inbox = FlagInbox(state, FlagValidator(cfg.flags.pattern))
+    return state, inbox
+
+
+@attack_app.command("status")
+def attack_status(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+) -> None:
+    """Show attack-side status: loaded modules and in-scope opponent targets."""
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+    loader = _build_loader()
+    exploit_mods = [m for m in loader.list_modules() if m.meta.category == "exploit"]
+    recon_mods = [m for m in loader.list_modules() if m.meta.category in ("recon", "assessment")]
+    opponents = [t for t in cfg.scope.targets if t.owner == "opponent"]
+    table = Table(title="Attack status")
+    table.add_column("Metric")
+    table.add_column("Value")
+    table.add_row("recon/assessment modules", str(len(recon_mods)))
+    table.add_row("exploit modules", str(len(exploit_mods)))
+    table.add_row("authorized opponent targets", str(len(opponents)))
+    console.print(table)
+    console.print("[dim]Flags are surfaced to the manual inbox; AETHER never submits.[/]")
+
+
+@flags_app.command("inbox")
+def flags_inbox(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    show: bool = typer.Option(False, "--show-values", help="Reveal flag values."),
+) -> None:
+    """Show PENDING flags awaiting operator submission."""
+    import asyncio
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run():
+        state, inbox = _open_state_and_inbox(cfg)
+        await state.open()
+        try:
+            rows = await inbox.pending()
+            _render_flag_table(rows, "PENDING flags (operator submits manually)", show)
+        finally:
+            await state.close()
+
+    asyncio.run(_run())
+
+
+@flags_app.command("history")
+def flags_history(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    show: bool = typer.Option(False, "--show-values", help="Reveal flag values."),
+) -> None:
+    """Show all flags ever discovered (any submission status)."""
+    import asyncio
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run():
+        state, inbox = _open_state_and_inbox(cfg)
+        await state.open()
+        try:
+            rows = await inbox.list()
+            _render_flag_table(rows, "Flag history", show)
+        finally:
+            await state.close()
+
+    asyncio.run(_run())
+
+
+@flags_app.command("copy")
+def flags_copy(
+    dedup_key: str = typer.Argument(..., help="Flag dedup key (prefix ok) to copy."),
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+) -> None:
+    """Print a single flag value to stdout for easy copy (operator convenience)."""
+    import asyncio
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run():
+        state, inbox = _open_state_and_inbox(cfg)
+        await state.open()
+        try:
+            rows = await inbox.list()
+            matches = [r for r in rows if r["dedup_key"].startswith(dedup_key)]
+            if not matches:
+                err_console.print("[red]no matching flag[/]")
+                raise typer.Exit(1)
+            if len(matches) > 1:
+                err_console.print(f"[yellow]{len(matches)} matches — be more specific[/]")
+                raise typer.Exit(1)
+            # Print bare value only (for piping to clipboard, e.g. | xclip).
+            print(matches[0]["value"])
+        finally:
+            await state.close()
+
+    asyncio.run(_run())
+
+
+@flags_app.command("mark-submitted")
+def flags_mark_submitted(
+    dedup_key: str = typer.Argument(..., help="Flag dedup key (prefix ok)."),
+    status: str = typer.Option("SUBMITTED", "--status",
+                               help="SUBMITTED | ACCEPTED | REJECTED | EXPIRED."),
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+) -> None:
+    """Operator action: record that YOU submitted a flag. AETHER never does this itself."""
+    import asyncio
+
+    from ..core.models import SubmissionStatus
+
+    try:
+        cfg, _ = load_cli_config(config)
+        st = SubmissionStatus(status.upper())
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+    if st == SubmissionStatus.PENDING:
+        err_console.print("[red]✗ cannot set status back to PENDING[/]")
+        raise typer.Exit(1)
+
+    async def _run():
+        state, inbox = _open_state_and_inbox(cfg)
+        await state.open()
+        try:
+            rows = await inbox.list()
+            matches = [r for r in rows if r["dedup_key"].startswith(dedup_key)]
+            if len(matches) != 1:
+                err_console.print(f"[red]✗ need exactly one match, found {len(matches)}[/]")
+                raise typer.Exit(1)
+            ok = await inbox.mark_submitted(matches[0]["dedup_key"], st)
+            console.print(f"[green]✓ marked {st.value}[/]" if ok else "[red]✗ not updated[/]")
+        finally:
+            await state.close()
+
+    asyncio.run(_run())
+
+
+def _render_flag_table(rows: list[dict], title: str, show_values: bool) -> None:
+    if not rows:
+        console.print(f"[yellow]{title}: (none)[/]")
+        return
+    table = Table(title=f"{title} — {len(rows)}")
+    for col in ("key", "target", "service", "module", "valid", "submit", "seen", "flag"):
+        table.add_column(col)
+    for r in rows:
+        valid_style = {"VALIDATED": "green", "UNVERIFIED": "yellow", "INVALID": "red"}.get(
+            r["validation"], "white"
+        )
+        value = r["value"] if show_values else "••••••(use --show-values)"
+        table.add_row(
+            r["dedup_key"][:10],
+            r["target"],
+            r["service"],
+            r["module"],
+            f"[{valid_style}]{r['validation']}[/]",
+            r["submission"],
+            str(r["seen_count"]),
+            value,
+        )
+    console.print(table)
+    if not show_values:
+        console.print("[dim]Flag values hidden by default. Use --show-values to reveal.[/]")
 
 
 if __name__ == "__main__":
