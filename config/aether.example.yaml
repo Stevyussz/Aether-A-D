@@ -32,8 +32,9 @@ scope:
       owner: self
 
 flags:
-  # Flag format is UNKNOWN until briefing. Example only — replace with official regex.
-  pattern: null             # e.g. "IONIC\\{[A-Za-z0-9_]+\\}"
+  # Official IONIC flag format. Accepts any non-empty payload inside the braces so no
+  # valid flag is ever missed; tighten only if the briefing says the payload is restricted.
+  pattern: "IONIC\\{[^}]+\\}"
   auto_submit: false        # MUST stay false — AETHER never auto-submits.
 
 scoring:

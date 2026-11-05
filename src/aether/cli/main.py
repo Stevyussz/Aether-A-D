@@ -41,6 +41,7 @@ report_app = typer.Typer(help="Operator reports.", no_args_is_help=True)
 lab_app = typer.Typer(help="Isolated local lab self-test.", no_args_is_help=True)
 
 _MONITOR_STOP_FLAG = Path("runtime/monitor.stop")
+_ATTACK_STOP_FLAG = Path("runtime/attack.stop")
 
 app.add_typer(system_app, name="system")
 app.add_typer(config_app, name="config")
@@ -332,6 +333,211 @@ def attack_status(
     table.add_row("authorized opponent targets", str(len(opponents)))
     console.print(table)
     console.print("[dim]Flags are surfaced to the manual inbox; AETHER never submits.[/]")
+
+
+@attack_app.command("sweep")
+def attack_sweep(
+    host: str = typer.Argument(None, help="Authorized opponent host to sweep. "
+                                          "Omit to sweep all in-scope opponent web targets."),
+    port: int = typer.Option(None, "--port", "-p", help="Target port (default: from scope)."),
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    show: bool = typer.Option(False, "--show-values", help="Reveal flag values."),
+    max_probes: int = typer.Option(None, "--max-probes", help="Cap probes per module."),
+    recon: bool = typer.Option(True, "--recon/--no-recon",
+                               help="Crawl the target first and aim payloads at discovered "
+                                    "endpoints/params (smarter, higher hit-rate)."),
+) -> None:
+    """Run the full validated exploit arsenal against an authorized target.
+
+    Scope-enforced (out-of-scope targets are refused), read-only/non-destructive, and every
+    genuine flag lands in the MANUAL inbox as PENDING. AETHER never submits and never
+    fabricates a flag.
+    """
+    import asyncio
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    if not cfg.flags.pattern:
+        console.print("[yellow]⚠ no flag pattern configured — flags would be UNVERIFIED. "
+                      "Set flags.pattern (e.g. IONIC\\{...\\}) first.[/]")
+
+    from ..attack.engine import AttackEngine
+    from ..attack.flags.inbox import FlagInbox
+    from ..attack.flags.validator import FlagValidator
+    from ..attack.memory import ExploitMemory
+    from ..attack.sweep import AttackSweep
+    from ..core.orchestrator import Orchestrator
+    from ..core.plugin import RunContext
+
+    # Resolve targets: explicit host, or every in-scope opponent web target.
+    opp_web = [t for t in cfg.scope.targets if t.owner == "opponent" and t.kind == "web"]
+    if host:
+        matches = [t for t in opp_web if t.host == host]
+        default_port = port or (matches[0].ports[0] if matches and matches[0].ports else 80)
+        targets = [(host, port or default_port)]
+    else:
+        if not opp_web:
+            err_console.print("[red]✗ no in-scope opponent web targets. Configure scope "
+                              "or pass a host.[/]")
+            raise typer.Exit(1)
+        targets = [(t.host, port or (t.ports[0] if t.ports else 80)) for t in opp_web]
+
+    async def _run():
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            # Fail closed: refuse any target not explicitly authorized in scope.
+            authorized = []
+            for h, p in targets:
+                if orch.scope.check(h, p).allowed:
+                    authorized.append((h, p))
+                else:
+                    err_console.print(f"[red]✗ {h}:{p} is NOT in authorized scope — skipped[/]")
+            if not authorized:
+                err_console.print("[red]✗ nothing authorized to sweep. Aborting (fail closed).[/]")
+                raise typer.Exit(1)
+
+            inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
+            sweep = AttackSweep(AttackEngine(orch, inbox), memory=ExploitMemory(orch.state))
+            extra = {"max_probes": max_probes} if max_probes else {}
+            kind_by_host = {t.host: t.kind for t in cfg.scope.targets}
+            for h, p in authorized:
+                console.print(f"[cyan]▶ sweeping {h}:{p} …[/]")
+                report = await sweep.run(
+                    RunContext(target_host=h, target_port=p,
+                               service=kind_by_host.get(h, "web"), extra=dict(extra)),
+                    recon=recon,
+                )
+                if report.fast_path:
+                    console.print(f"  [dim]fast-path (learned): {', '.join(report.fast_path)}[/]")
+                if report.discovered_endpoints or report.discovered_params:
+                    console.print(f"  [dim]recon: {len(report.discovered_endpoints)} "
+                                  f"endpoint(s), {len(report.discovered_params)} param(s)[/]")
+                style = "green" if report.any_flag else "yellow"
+                console.print(f"[{style}]{report.summary()}[/]")
+                if report.confirmed_modules:
+                    console.print("  confirmed: " + ", ".join(report.confirmed_modules))
+            rows = await inbox.pending()
+            _render_flag_table(rows, "PENDING flags (operator submits manually)", show)
+            console.print("[dim]AETHER never submits. Review, then submit on the official "
+                          "portal yourself.[/]")
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(_run())
+
+
+@attack_app.command("loop")
+def attack_loop(
+    host: str = typer.Argument(None, help="Authorized opponent host. Omit to sweep all "
+                                          "in-scope opponent web targets each round."),
+    port: int = typer.Option(None, "--port", "-p", help="Target port (default: from scope)."),
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    interval: float = typer.Option(60.0, "--interval",
+                                   help="Seconds between rounds (set to the tick length)."),
+    duration: float = typer.Option(0.0, "--duration", help="Total seconds (0 = until stopped)."),
+    once: bool = typer.Option(False, "--once", help="Run a single round and exit."),
+    max_probes: int = typer.Option(None, "--max-probes", help="Cap probes per module."),
+    recon: bool = typer.Option(True, "--recon/--no-recon",
+                               help="Crawl each target first to aim payloads (smarter)."),
+) -> None:
+    """Continuously re-sweep authorized targets each round (flags rotate per tick).
+
+    Foreground loop; stop with Ctrl-C or `aether attack stop`. Every genuine flag is stamped
+    with the current tick and lands in the MANUAL inbox as PENDING. AETHER never submits.
+    """
+    import asyncio
+    import time
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    from ..attack.engine import AttackEngine
+    from ..attack.flags.inbox import FlagInbox
+    from ..attack.flags.validator import FlagValidator
+    from ..attack.memory import ExploitMemory
+    from ..attack.sweep import AttackSweep
+    from ..core.orchestrator import Orchestrator
+    from ..core.plugin import RunContext
+
+    opp_web = [t for t in cfg.scope.targets if t.owner == "opponent" and t.kind == "web"]
+    if host:
+        matches = [t for t in opp_web if t.host == host]
+        targets = [(host, port or (matches[0].ports[0] if matches and matches[0].ports else 80))]
+    elif opp_web:
+        targets = [(t.host, port or (t.ports[0] if t.ports else 80)) for t in opp_web]
+    else:
+        err_console.print("[red]✗ no in-scope opponent web targets. Configure scope or pass "
+                          "a host.[/]")
+        raise typer.Exit(1)
+
+    Path("runtime").mkdir(exist_ok=True)
+    if _ATTACK_STOP_FLAG.exists():
+        _ATTACK_STOP_FLAG.unlink()
+
+    async def _run():
+        orch = Orchestrator(cfg)
+        await orch.start()
+        authorized = [(h, p) for h, p in targets if orch.scope.check(h, p).allowed]
+        for h, p in targets:
+            if (h, p) not in authorized:
+                err_console.print(f"[red]✗ {h}:{p} not in scope — skipped[/]")
+        if not authorized:
+            await orch.shutdown()
+            err_console.print("[red]✗ nothing authorized to sweep. Aborting (fail closed).[/]")
+            raise typer.Exit(1)
+
+        inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
+        sweep = AttackSweep(AttackEngine(orch, inbox), memory=ExploitMemory(orch.state))
+        extra = {"max_probes": max_probes} if max_probes else {}
+        start = time.time()
+        rounds = 0
+        try:
+            while True:
+                rounds += 1
+                new_flags = 0
+                kind_by_host = {t.host: t.kind for t in cfg.scope.targets}
+                for h, p in authorized:
+                    report = await sweep.run(
+                        RunContext(target_host=h, target_port=p,
+                                   service=kind_by_host.get(h, "web"), extra=dict(extra)),
+                        recon=recon,
+                    )
+                    new_flags += len(report.flags_found)
+                total = len(await inbox.list())
+                console.print(f"[cyan]round {rounds}[/]: swept {len(authorized)} target(s), "
+                              f"{new_flags} flag hit(s) this round, {total} unique in inbox")
+                if once or (duration and (time.time() - start) >= duration):
+                    break
+                if _ATTACK_STOP_FLAG.exists():
+                    console.print("[yellow]stop flag detected — shutting down[/]")
+                    _ATTACK_STOP_FLAG.unlink()
+                    break
+                await asyncio.sleep(interval)
+        finally:
+            await orch.shutdown()
+        console.print(f"attack loop finished after {rounds} round(s). "
+                      "Review `aether flags inbox` and submit manually.")
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]attack loop interrupted by operator[/]")
+
+
+@attack_app.command("stop")
+def attack_stop() -> None:
+    """Signal a running `attack loop` to stop at its next round."""
+    Path("runtime").mkdir(exist_ok=True)
+    _ATTACK_STOP_FLAG.write_text("stop", encoding="utf-8")
+    console.print("[green]✓ stop signal written (runtime/attack.stop)[/]")
 
 
 @flags_app.command("inbox")

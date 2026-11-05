@@ -27,7 +27,18 @@ intentional. Do not set `scope.enforce: false` during the competition.
 
 ```bash
 .venv/bin/aether attack status                # modules + authorized opponent targets
-# (recon / exploit runs are driven by the engine; flags flow to the inbox automatically)
+
+# AUTO flag-finding — runs the whole validated exploit arsenal at one target:
+.venv/bin/aether attack sweep <opponent-host>  # smart by default: crawls first, then aims
+.venv/bin/aether attack sweep                   # omit host = sweep ALL in-scope opponents
+.venv/bin/aether attack sweep <host> --no-recon # skip the crawl (blind wordlists only)
+
+# CONTINUOUS — re-sweep every round (flags rotate each tick); set --interval to tick length:
+.venv/bin/aether attack loop --interval 60      # Ctrl-C or `aether attack stop` to end
+#   AETHER remembers which modules hit each target (the "exploit farm") and runs them FIRST
+#   each round, so the fresh flag is re-pulled immediately. Knowledge persists across restarts.
+.venv/bin/aether attack stop                     # graceful stop at next round
+
 .venv/bin/aether flags inbox                   # PENDING flags, values hidden by default
 .venv/bin/aether flags inbox --show-values     # reveal when you are ready to submit
 .venv/bin/aether flags copy <key-prefix>       # prints the bare value (pipe to clipboard)
@@ -41,6 +52,31 @@ intentional. Do not set `scope.enforce: false` during the competition.
 #   later, if the portal accepted/rejected:
 .venv/bin/aether flags mark-submitted <key-prefix> --status ACCEPTED
 ```
+
+The arsenal auto-selects modules by the target's `kind`:
+
+- **Web / HTTP services** (`kind: web`) — exposed flag files/backups/VCS, path traversal/LFI,
+  SQLi, OS command injection, SSTI, NoSQLi, default credentials, IDOR, **weak JWT
+  (alg:none / weak secret)**, **insecure deserialization** (PHP/Python/Node/Ruby), SSRF, XXE,
+  GraphQL, and **unauthenticated Elasticsearch**.
+- **Data stores** (`kind: redis` / `kind: memcached`) — dump an unauthenticated Redis or
+  Memcached and recover flags from the values.
+- **Custom TCP services** (`kind: tcp`/`vault`/`note`) — speak the common vault/note command
+  vocabulary and read back flag records; the network set (Redis + Memcached + vault) is tried
+  for any unknown non-web service.
+
+**Smart recon (default on):** before firing, `sweep`/`loop` crawl the web target to learn
+its real endpoints, query parameters, and form fields, then aim every injection module at
+that discovered surface first (not just blind wordlists). This finds flags hidden behind
+non-standard endpoints/params that a static list would miss. Use `--no-recon` to skip it.
+
+Set each opponent target's `kind` in scope so `sweep`/`loop` picks the right set (or pass a
+host and it defaults to the web arsenal). All probes are read-only/non-destructive, every run
+is scope-enforced (out-of-scope targets refused), and a flag is only ever surfaced if it is
+genuine output — nothing is fabricated. If the arsenal finds nothing, the target simply isn't
+vulnerable to those classes; write a target-specific module (see
+`src/aether/attack/exploits/web_sqli.py` or `tcp_vault.py` as templates) and it joins the
+sweep automatically.
 
 Validation legend in the inbox: **VALIDATED** (matches official pattern — submit these),
 **UNVERIFIED** (no pattern configured yet — check manually), **INVALID** (does not match),
