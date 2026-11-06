@@ -821,6 +821,35 @@ def monitor_start(
         console.print("\n[yellow]monitor interrupted by operator[/]")
 
 
+@monitor_app.command("dashboard")
+def monitor_dashboard(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    interval: float = typer.Option(5.0, "--interval", help="Seconds between sweeps."),
+    duration: float = typer.Option(0.0, "--duration", help="Total seconds (0 = until stopped)."),
+    once: bool = typer.Option(False, "--once", help="Render a single snapshot and exit."),
+    log_text: str = typer.Option(None, "--log-text", help="Feed a log sample to the analyzer."),
+) -> None:
+    """Live defense dashboard: real service health, integrity, incidents, flag & patch stats."""
+    import asyncio
+
+    from .dashboard import run_dashboard
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    Path("runtime").mkdir(exist_ok=True)
+    if _MONITOR_STOP_FLAG.exists():
+        _MONITOR_STOP_FLAG.unlink()
+    try:
+        asyncio.run(run_dashboard(cfg, interval=interval, duration=duration, once=once,
+                                  log_text=log_text, stop_flag=_MONITOR_STOP_FLAG))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]dashboard interrupted by operator[/]")
+
+
 @monitor_app.command("stop")
 def monitor_stop() -> None:
     """Signal a running `monitor start` loop to stop at its next sweep."""

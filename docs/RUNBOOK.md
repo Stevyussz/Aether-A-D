@@ -92,11 +92,18 @@ Validation legend in the inbox: **VALIDATED** (matches official pattern — subm
 ## 3. During the round — defend
 
 ```bash
-.venv/bin/aether defense status
-.venv/bin/aether monitor start --interval 10        # foreground sweep loop
+aether defense status
+aether monitor dashboard --interval 5    # LIVE dashboard: real health, integrity, incidents,
+                                         # flag-inbox stats, patch log, tick clock, resources
+aether monitor start --interval 10       # plain text sweep loop (lighter, scriptable)
 #   another terminal / teammate:
-.venv/bin/aether monitor stop                        # graceful stop at next sweep
+aether monitor stop                       # graceful stop of either at the next sweep
 ```
+
+The live dashboard (`monitor dashboard`, or menu option 10) shows only genuine data: service
+health/latency from real probes, file-integrity drift from real baseline scans, incidents
+fused this sweep, flag-inbox counts by validation/submission, the modification/patch log, the
+competition tick clock, and live CPU/memory — refreshing every `--interval` seconds.
 
 Monitor sweeps combine file-integrity drift, log IOCs, and service health into incidents.
 Remediation (patch/recovery) is **operator-gated** — AETHER never restarts or patches a

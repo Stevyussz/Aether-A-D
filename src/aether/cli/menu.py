@@ -65,7 +65,8 @@ def _menu_items():
         ("7", "Copy a flag value", "print one flag value for the portal", _a_flags_copy),
         ("8", "Mark flag submitted", "record that you submitted/accepted a flag", _a_flags_mark),
         ("9", "Defense · status", "services/integrity watched", _a_defense_status),
-        ("10", "Defense · monitor", "start the live sweep loop (Ctrl-C to stop)", _a_monitor_start),
+        ("10", "Defense · live dashboard", "real health/integrity/incidents/stats screen", _a_monitor_dashboard),
+        ("15", "Defense · plain monitor", "simple text sweep loop (Ctrl-C to stop)", _a_monitor_start),
         ("11", "Scoring status", "tick clock + score history (if configured)", _a_scoring_show),
         ("12", "Generate report", "operator report (flag values hidden)", _a_report),
         ("13", "Lab self-test", "safe end-to-end pipeline on a local lab", _a_lab_test),
@@ -138,6 +139,11 @@ def _a_flags_mark():
 def _a_monitor_start():
     interval = _ask("Seconds between defense sweeps", default="10")
     return ["monitor", "start", "--interval", interval.strip() or "10"]
+
+
+def _a_monitor_dashboard():
+    interval = _ask("Seconds between sweeps", default="5")
+    return ["monitor", "dashboard", "--interval", interval.strip() or "5"]
 
 
 def run_menu() -> None:
