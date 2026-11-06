@@ -48,12 +48,20 @@ Self-checks: `aether lab test`, `python scripts/acceptance_check.py`,
 uv venv --python 3.12 .venv
 uv pip install -e ".[dev]" --python .venv/bin/python
 
-# Run the CLI
-.venv/bin/aether --help
-.venv/bin/aether init
-.venv/bin/aether system health
-.venv/bin/aether config validate
-.venv/bin/aether scope show
+# Install the `aether` command globally (type `aether` anywhere — no prefix needed):
+uv tool install --editable .     # puts `aether` on ~/.local/bin (ensure it's on PATH)
+
+# Just run it — a bare `aether` opens the interactive console (ASCII home + control menu):
+aether                            # guided menu: health, scope, sweep, inbox, monitor…
+aether menu                       # same console, explicitly
+
+# Or drive subcommands directly:
+aether --help
+aether init
+aether system health
+aether config validate
+aether scope show
+aether attack sweep <opponent-host>      # smart, scope-enforced; flags -> manual inbox
 
 # Run the test suite
 .venv/bin/pytest

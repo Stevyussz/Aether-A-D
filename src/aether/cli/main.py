@@ -23,7 +23,7 @@ from .context import DEFAULT_CONFIG, EXAMPLE_CONFIG, console, err_console, load_
 app = typer.Typer(
     name="aether",
     help="AETHER A&D — competition-grade Attack & Defense CTF framework (no AI runtime).",
-    no_args_is_help=True,
+    no_args_is_help=False,
     add_completion=False,
 )
 
@@ -62,6 +62,21 @@ def _build_loader() -> ModuleLoader:
     for pkg in ("aether.attack", "aether.defense"):
         loader.discover(pkg)
     return loader
+
+
+@app.callback(invoke_without_command=True)
+def _root(ctx: typer.Context) -> None:
+    """Launch the interactive control console when run with no subcommand."""
+    if ctx.invoked_subcommand is None:
+        from .menu import run_menu
+        run_menu()
+
+
+@app.command()
+def menu() -> None:
+    """Open the interactive operator console (ASCII home + guided control menu)."""
+    from .menu import run_menu
+    run_menu()
 
 
 @app.command()

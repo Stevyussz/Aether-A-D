@@ -8,8 +8,15 @@ you add at the competition is the official scope/flag/timing in `config/aether.y
 ```bash
 uv venv --python 3.12 .venv
 uv pip install -e ".[dev]" --python .venv/bin/python
-.venv/bin/aether system health      # all green, "No-AI runtime: clean"
+uv tool install --editable .        # global `aether` command (no .venv/bin prefix)
+aether system health                # all green, "No-AI runtime: clean"
 ```
+
+**Easiest control — the interactive console.** Just type `aether` (no arguments) for the
+ASCII home screen and a guided menu: system health, config/scope, attack sweep & loop, flag
+inbox, copy/mark flags, defense monitor, scoring, reports, and the lab self-test — all by
+selecting a number and answering prompts. Everything below is also available as direct
+subcommands for speed.
 
 ## 1. Before the round — configure scope (CRITICAL)
 
