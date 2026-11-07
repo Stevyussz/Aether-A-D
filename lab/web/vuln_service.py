@@ -78,6 +78,26 @@ def _looks_like_deser_gadget(value: str) -> bool:
         pass
     return False
 
+def _is_flag_read_cmd(v: str) -> bool:
+    """Model a server filesystem: True when the injected command would READ the flag.
+
+    A&D flags live on the server (``/root/root.txt``, ``/home/*/user.txt``, env, or anywhere
+    matched by ``grep <prefix>``). This returns True for a read-only command that reaches
+    one of those, so the lab returns the flag exactly when a genuine read is attempted.
+    """
+    low = v.lower()
+    if "grep" in low and ("ionic" in low or "flag" in low):
+        return True
+    readers = ("cat", "type ", "find ", "less ", "head ", "more ",
+               "file_get_contents", "popen", "shell_exec", "system(", "open(", "`")
+    targets = ("flag", "root.txt", "user.txt", "proof.txt", "/root", "/home", "desktop")
+    if any(r in low for r in readers) and any(t in low for t in targets):
+        return True
+    if "env" in low and ("flag" in low or "ionic" in low):
+        return True
+    return False
+
+
 _DEFAULT_PATHS = {"/flag", "/flag.txt", "/flags.txt", "/flag.php", "/app/flag.txt"}
 _CRED_PAIRS = {("admin", "admin"), ("admin", "password"), ("root", "root")}
 _IDOR_SECRET = "13"
@@ -119,20 +139,20 @@ def make_handler(flag: str, enabled: frozenset[str]):
                 if "union" in v.lower() and "select" in v.lower() and "flag" in v.lower():
                     return _page(f"query result row: {flag}")
 
-        # 4. OS command injection (read-only cat).
+        # 4. OS command injection: flag read off the server filesystem (grep/cat/find/env).
         if "command_injection" in enabled:
             for v in vals:
-                if "cat" in v and "flag" in v:
-                    return _page(f"PING 127.0.0.1 ...\n{flag}")
+                if _is_flag_read_cmd(v):
+                    return _page(f"PING 127.0.0.1 (127.0.0.1) 56(84) bytes of data.\n{flag}")
 
-        # 5. Server-side template injection.
+        # 5. Server-side template injection → RCE reading the server flag.
         if "ssti" in enabled:
             for v in vals:
-                if any(tok in v for tok in ("open('/flag", 'open("/flag', "file_get_contents('/flag",
-                                            "cat /flag", "Runtime", "{/php}")):
-                    return _page(f"rendered: {flag}")
                 if "7*7" in v:
                     return _page("rendered: 49")
+                if _is_flag_read_cmd(v) or any(tok in v for tok in (
+                        "Runtime", "{/php}", "|filter('system')", "|map('system')", "Execute")):
+                    return _page(f"rendered: {flag}")
 
         # 6. NoSQL operator injection (auth/filter bypass).
         if "nosqli" in enabled:

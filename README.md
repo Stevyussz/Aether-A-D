@@ -7,7 +7,9 @@ continuous objectives during an authorized Attack & Defense competition:
 
 1. **ATTACK** — discover vulnerabilities in *explicitly authorized* opponent services, run
    validated exploit modules, extract and validate flags, and surface them immediately to the
-   human operator for **manual** submission.
+   human operator for **manual** submission. Initial access is via the web, but A&D flags live
+   on the **server filesystem** — so the RCE-capable modules read the flag off the server
+   (`/root/root.txt`, `/home/*/user.txt`, or wherever a `grep` for the flag prefix finds it).
 2. **DEFENSE** — monitor our own services, detect compromise, perform safe and reversible
    remediation, and preserve flag data, service functionality, and availability.
 
@@ -26,7 +28,7 @@ continuous objectives during an authorized Attack & Defense competition:
 
 ## Status
 
-**Release candidate.** All 8 build phases implemented; 138 automated tests passing; 13/14
+**Release candidate.** All build phases implemented; 178 automated tests passing; 13/14
 acceptance criteria verified in the local lab (the last depends on the official briefing and
 is deliberately left pending). See:
 

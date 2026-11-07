@@ -60,12 +60,25 @@ intentional. Do not set `scope.enforce: false` during the competition.
 .venv/bin/aether flags mark-submitted <key-prefix> --status ACCEPTED
 ```
 
+**Web gets you in — the flag lives on the SERVER.** This competition follows the A&D /
+HTB / THM / VulnHub pattern: initial access is via the web, but the flag is usually on the
+server filesystem (`/root/root.txt`, `/home/*/user.txt`, `proof.txt`, a web-root `flag*`, or
+an env var), NOT in the HTTP response. So every module that reaches code execution (command
+injection, SSTI, deserialization, LFI) actively **reads the flag off the server**: it `cat`s
+the conventional flag files AND — most reliably — **greps the filesystem for the flag prefix**
+(`IONIC{`, derived automatically from your configured `flags.pattern`) so the flag is found
+wherever it hides, under any filename. All reads are read-only and bounded (no whole-disk
+scans, no writes). If no flag pattern is configured yet, the modules fall back to `cat`-ing
+the common flag files.
+
 The arsenal auto-selects modules by the target's `kind`:
 
 - **Web / HTTP services** (`kind: web`) — exposed flag files/backups/VCS, path traversal/LFI,
-  SQLi, OS command injection, SSTI, NoSQLi, default credentials, IDOR, **weak JWT
-  (alg:none / weak secret)**, **insecure deserialization** (PHP/Python/Node/Ruby), SSRF, XXE,
-  GraphQL, and **unauthenticated Elasticsearch**.
+  SQLi, **OS command injection (reads `/root/root.txt`, `/home/*/user.txt`, greps the FS)**,
+  **SSTI → RCE (Jinja2/Twig/Freemarker/Smarty/ERB/PHP, reads the server flag)**, NoSQLi,
+  default credentials, IDOR, **weak JWT (alg:none / weak secret)**, **insecure
+  deserialization** (PHP/Python/Node/Ruby), SSRF, XXE, GraphQL, and **unauthenticated
+  Elasticsearch**.
 - **Data stores** (`kind: redis` / `kind: memcached`) — dump an unauthenticated Redis or
   Memcached and recover flags from the values.
 - **Custom TCP services** (`kind: tcp`/`vault`/`note`) — speak the common vault/note command

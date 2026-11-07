@@ -16,6 +16,7 @@ from ..core.logger import get_logger
 from ..core.models import Flag, ModuleResult, TaskState
 from ..core.orchestrator import Orchestrator
 from ..core.plugin import Module, RunContext
+from .exploits._server_flags import literal_prefix
 from .exploits.base import ExploitPlugin
 from .flags.extractor import FlagExtractor
 from .flags.inbox import FlagInbox, IngestOutcome
@@ -44,6 +45,9 @@ class AttackEngine:
         pattern = orch.config.flags.pattern
         self._extractor = FlagExtractor(pattern)
         self._validator = FlagValidator(pattern)
+        # Literal flag prefix (e.g. "IONIC{") so RCE modules can grep the server
+        # filesystem for the flag wherever it hides (A&D flags live on the server).
+        self._flag_grep = literal_prefix(pattern)
         self._verifier = ExploitVerifier(self._validator)
         self._clock = TickClock(orch.config.scoring.tick_seconds, orch.config.scoring.epoch)
 
@@ -57,14 +61,31 @@ class AttackEngine:
         """Run a recon/assessment module (scope enforced by the orchestrator)."""
         return await self.orch.run_module(module, context)
 
+    @staticmethod
+    def _string_leaves(obj) -> list[str]:
+        """All string LEAVES of a nested structure — dict VALUES only, never keys.
+
+        Response bodies are stored under keys that echo our own probe labels/payloads; those
+        keys must never be scanned for flags (a payload like ``grep 'IONIC{'`` plus a ``{}``
+        elsewhere would otherwise look like a flag). We only ever extract from the genuine
+        server output held in the values.
+        """
+        if isinstance(obj, str):
+            return [obj]
+        out: list[str] = []
+        if isinstance(obj, dict):
+            for v in obj.values():
+                out.extend(AttackEngine._string_leaves(v))
+        elif isinstance(obj, (list, tuple)):
+            for v in obj:
+                out.extend(AttackEngine._string_leaves(v))
+        return out
+
     def _extract_candidates(self, result: ModuleResult) -> list[str]:
-        """Collect flag strings from genuine result output (detail + data text)."""
+        """Collect flag strings from genuine result output (detail + response bodies)."""
         texts: list[str] = [result.detail or ""]
         for v in result.data.values():
-            if isinstance(v, str):
-                texts.append(v)
-            elif isinstance(v, (list, dict)):
-                texts.append(str(v))
+            texts.extend(self._string_leaves(v))
         found: list[str] = []
         for t in texts:
             found.extend(self._extractor.extract(t))
@@ -79,7 +100,10 @@ class AttackEngine:
                                state=TaskState.FAILED, detail=f"prerequisites unmet: {reason}")
             return ExploitRun(result=res, verification=VerificationReport(False, reason))
 
-        # 2. Scope-enforced, timeout-bounded execution.
+        # 2. Scope-enforced, timeout-bounded execution. Hand RCE-capable modules the flag
+        #    prefix so they can read it off the server filesystem (operator override wins).
+        if self._flag_grep:
+            context.extra.setdefault("flag_grep", self._flag_grep)
         result = await self.orch.run_module(plugin, context)
 
         tick = self._current_tick(context.tick)
