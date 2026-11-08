@@ -26,11 +26,13 @@ aether web --port 9000     # choose the port (localhost only, never exposed)
 ```
 
 It serves four tabs — **Monitor** (live health/integrity/incidents/flags/patch-log/tick/
-resources, auto-refreshing), **Attack** (one-click scope-enforced sweep per authorized target),
-**Flags** (review, reveal, and mark submitted/accepted), and **Config** (view scope +
-readiness, edit and save the YAML). It binds to localhost only, mutating actions require the
-token in the URL, scope stays fail-closed, config save refuses to disable scope, and AETHER
-never auto-submits — exactly like the CLI.
+resources + **detected web shells** with a one-click quarantine, auto-refreshing), **Attack**
+(one-click scope-enforced sweep per authorized target with a **live progress panel** — bar,
+current module, confirmed modules, flag count, and a streaming log), **Flags** (review, reveal,
+and mark submitted/accepted), and **Config** (view scope + readiness, edit and save the YAML).
+It binds to localhost only, mutating actions require the token in the URL, scope stays
+fail-closed, config save refuses to disable scope, quarantine only touches files inside our own
+watched roots and backs up first, and AETHER never auto-submits — exactly like the CLI.
 
 ## 1. Before the round — configure scope (CRITICAL)
 
@@ -139,6 +141,15 @@ aether monitor dashboard --interval 5    # LIVE dashboard: real health, integrit
 aether monitor start --interval 10       # plain text sweep loop (lighter, scriptable)
 #   another terminal / teammate:
 aether monitor stop                       # graceful stop of either at the next sweep
+
+# WEB SHELLS — if an opponent drops a shell on our service, find and remove it safely:
+aether defense webshells                  # READ-ONLY scan of our watched web roots
+aether defense webshells --path /var/www  # scan a specific directory
+aether defense quarantine /var/www/html/uploads/shell.php
+#   quarantine is operator-gated and reversible: it backs up the file, moves it out of the
+#   web root, runs a functional test, and auto-rolls-back if the service breaks. The legit
+#   files are never touched. Each monitor/defense sweep also raises a CRITICAL "webshell"
+#   incident when a shell is detected.
 ```
 
 The live dashboard (`monitor dashboard`, or menu option 10) shows only genuine data: service

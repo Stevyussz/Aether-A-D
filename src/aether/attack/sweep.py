@@ -11,6 +11,7 @@ vulnerability. Empty results mean "nothing matched", never a fabricated success.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..core.logger import get_logger
@@ -36,6 +37,18 @@ from .exploits.web_ssti import SstiExploit
 from .exploits.web_xxe import XxeExploit
 
 log = get_logger("attack_sweep")
+
+# A progress callback receives one dict per event; errors in it never break the sweep.
+ProgressCb = Callable[[dict], None]
+
+
+def _emit(cb: ProgressCb | None, event: dict) -> None:
+    if cb is None:
+        return
+    try:
+        cb(event)
+    except Exception:  # noqa: BLE001 - telemetry must never break the attack
+        pass
 
 # Validated web (HTTP) exploits, ordered cheapest/highest-yield first.
 WEB_EXPLOITS: tuple[type[ExploitPlugin], ...] = (
@@ -163,9 +176,11 @@ class AttackSweep:
         plugins: list[ExploitPlugin] | None = None,
         recon: bool = False,
         login: bool = False,
+        progress: ProgressCb | None = None,
     ) -> SweepReport:
         plugins = plugins if plugins is not None else exploits_for(context.service)
         report = SweepReport(target=context.target_host or "unknown")
+        _emit(progress, {"phase": "start", "target": report.target})
 
         # Exploit farm: run modules that previously confirmed on this target FIRST.
         if self.memory is not None:
@@ -178,6 +193,7 @@ class AttackSweep:
 
         # Smart mode: learn the real attack surface first, then aim payloads at it.
         if recon and (context.service or "web").lower() in _WEB_KINDS:
+            _emit(progress, {"phase": "recon"})
             endpoints, params = await self._recon(context)
             report.discovered_endpoints = endpoints
             report.discovered_params = params
@@ -186,12 +202,15 @@ class AttackSweep:
                 context.extra["discovered_paths"] = endpoints
             if params:
                 context.extra["discovered_params"] = params
+            _emit(progress, {"phase": "recon_done",
+                             "endpoints": len(endpoints), "params": len(params)})
             log.info("sweep.recon", extra={"extra_fields": {
                 "target": report.target, "endpoints": len(endpoints), "params": len(params),
             }})
 
         # Smart login: establish a session so the arsenal attacks BEHIND the login.
         if login and (context.service or "web").lower() in _WEB_KINDS and not context.extra.get("cookies"):
+            _emit(progress, {"phase": "login"})
             cookies, who, ep = await self._login(context)
             if cookies:
                 context.extra["cookies"] = cookies
@@ -202,12 +221,21 @@ class AttackSweep:
                     "target": report.target, "as": who, "endpoint": ep,
                     "cookies": len(cookies),
                 }})
+            _emit(progress, {"phase": "login_done",
+                             "authenticated": report.authenticated, "as": who})
 
         # Sequential by design: bounded, predictable load on the target (no accidental DoS).
-        for plugin in plugins:
+        total = len(plugins)
+        _emit(progress, {"phase": "arsenal", "total": total})
+        for i, plugin in enumerate(plugins, start=1):
+            _emit(progress, {"phase": "module_start", "module": plugin.identifier,
+                             "index": i, "total": total})
             run = await self.engine.run_exploit(plugin, context)
             report.runs.append(run)
             flags = len(run.result.flags)
+            _emit(progress, {"phase": "module", "module": plugin.identifier,
+                             "index": i, "total": total, "confirmed": run.confirmed,
+                             "flags": flags, "state": run.result.state.value})
             log.info("sweep.module", extra={"extra_fields": {
                 "module": plugin.identifier, "state": run.result.state.value,
                 "confirmed": run.confirmed, "flags": flags, "target": report.target,
@@ -216,6 +244,10 @@ class AttackSweep:
         if self.memory is not None and report.confirmed_modules:
             await self.memory.record(report.target, context.service,
                                      report.confirmed_modules)
+        _emit(progress, {"phase": "done", "modules": report.modules_run,
+                         "confirmed": report.confirmed_modules,
+                         "flags": len(report.flags_found),
+                         "summary": report.summary()})
         log.info("sweep.done", extra={"extra_fields": {
             "target": report.target, "modules": report.modules_run,
             "confirmed": report.confirmed_modules, "flags": len(report.flags_found),

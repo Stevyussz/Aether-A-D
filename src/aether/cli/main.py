@@ -336,6 +336,98 @@ def defense_status(
     asyncio.run(_run())
 
 
+def _watch_self_roots(engine, cfg) -> int:
+    """Register every self-owned target whose notes name an existing local path."""
+    n = 0
+    for t in cfg.scope.targets:
+        if t.owner == "self" and t.notes and Path(t.notes).exists():
+            engine.watch_path(t.name, t.notes)
+            n += 1
+    return n
+
+
+@defense_app.command("webshells")
+def defense_webshells(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    path: str = typer.Option(None, "--path", help="Scan this directory instead of scope."),
+) -> None:
+    """Read-only scan of our own web roots for planted web shells."""
+    import asyncio
+
+    from ..core.orchestrator import Orchestrator
+    from ..defense.engine import DefenseEngine
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            engine = DefenseEngine(orch)
+            if path:
+                engine.watch_path("cli", path)
+            else:
+                _watch_self_roots(engine, cfg)
+            hits = engine.scan_webshells()
+            if not hits:
+                console.print("[green]✓ no web shells detected in watched roots[/]")
+                return
+            table = Table(title="Suspected web shells (READ-ONLY detection)")
+            table.add_column("path"); table.add_column("signatures")
+            table.add_column("excerpt", overflow="fold")
+            for h in hits:
+                table.add_row(f"[red]{h.path}[/]", ", ".join(h.signatures), h.snippet)
+            console.print(table)
+            console.print("[yellow]Review, then quarantine with:[/] "
+                          "[bold]aether defense quarantine <abs-path>[/] "
+                          "[dim](backs up first, reversible)[/]")
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(_run())
+
+
+@defense_app.command("quarantine")
+def defense_quarantine(
+    target: str = typer.Argument(..., help="Absolute path of the shell to quarantine."),
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+) -> None:
+    """Operator-gated: safely remove a detected web shell (backup → move → verify, reversible)."""
+    import asyncio
+
+    from ..core.orchestrator import Orchestrator
+    from ..defense.engine import DefenseEngine
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            engine = DefenseEngine(orch)
+            _watch_self_roots(engine, cfg)
+            result = await engine.quarantine_webshell(target)
+            colour = "green" if result.safe else "red"
+            console.print(f"[{colour}]{result.outcome.value}[/]: {result.detail}")
+            for step in result.steps:
+                console.print(f"  [dim]{step}[/]")
+            if result.snapshot_id:
+                console.print(f"[dim]backup snapshot: {result.snapshot_id} "
+                              f"(restore with recovery if needed)[/]")
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(_run())
+
+
 def _open_state_and_inbox(cfg):
     """Build a StateManager + FlagInbox for CLI flag commands (async)."""
     from ..attack.flags.inbox import FlagInbox

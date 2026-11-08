@@ -13,8 +13,10 @@ continuous objectives during an authorized Attack & Defense competition:
    It **auto-logs-in** (CSRF-aware, default/weak or operator creds) to attack behind the login,
    and offers read-only **priv-esc enumeration** (`id`/`sudo -l`/SUID/caps/cron) after a
    foothold.
-2. **DEFENSE** — monitor our own services, detect compromise, perform safe and reversible
-   remediation, and preserve flag data, service functionality, and availability.
+2. **DEFENSE** — monitor our own services, detect compromise (including **web shells** an
+   opponent plants after getting RCE), perform safe and reversible remediation (web-shell
+   **quarantine** backs up first and auto-rolls-back), and preserve flag data, service
+   functionality, and availability.
 
 Drive it from the terminal (`aether`, or direct subcommands), the live TUI dashboard
 (`aether monitor dashboard`), or the **browser Web Console** (`aether web`) — a localhost UI
@@ -35,7 +37,7 @@ with monitoring, one-click scope-enforced sweeps, flag review, and config manage
 
 ## Status
 
-**Release candidate.** All build phases implemented; 182 automated tests passing; 13/14
+**Release candidate.** All build phases implemented; 194 automated tests passing; 13/14
 acceptance criteria verified in the local lab (the last depends on the official briefing and
 is deliberately left pending). See:
 

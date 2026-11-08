@@ -38,8 +38,30 @@ class IncidentDetector:
         integrity: IntegrityReport | None = None,
         log_matches: list[LogMatch] | None = None,
         health: list[HealthResult] | None = None,
+        webshell_hits: list | None = None,
     ) -> list[Incident]:
         incidents: list[Incident] = []
+
+        if webshell_hits:
+            incidents.append(
+                Incident(
+                    kind="webshell",
+                    severity=Severity.CRITICAL,
+                    summary=(
+                        f"{len(webshell_hits)} suspected web shell(s) planted: "
+                        f"{[getattr(h, 'path', str(h)) for h in webshell_hits]}"
+                    ),
+                    evidence={
+                        "hits": [
+                            {"path": getattr(h, "path", str(h)),
+                             "abs_path": getattr(h, "abs_path", ""),
+                             "signatures": list(getattr(h, "signatures", [])),
+                             "snippet": getattr(h, "snippet", "")}
+                            for h in webshell_hits
+                        ]
+                    },
+                )
+            )
 
         if integrity is not None and not integrity.clean:
             sev = Severity.CRITICAL if integrity.protected_hits else Severity.WARNING

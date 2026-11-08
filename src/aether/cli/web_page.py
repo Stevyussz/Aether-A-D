@@ -85,6 +85,9 @@ PAGE = r"""<!DOCTYPE html>
     <div style="height:14px"></div>
     <div class="card"><h3>incidents (latest sweep)</h3><div id="incidents"></div></div>
     <div style="height:14px"></div>
+    <div class="card"><h3>web shells detected (our services)</h3><div id="webshells"></div>
+      <div class="log" id="wsout"></div></div>
+    <div style="height:14px"></div>
     <div class="grid">
       <div class="card"><h3>flag inbox</h3><div id="flagsum"></div></div>
       <div class="card"><h3>modification / patch log</h3><div id="mods"></div></div>
@@ -99,7 +102,21 @@ PAGE = r"""<!DOCTYPE html>
       <div id="targets"></div>
       <div style="height:10px"></div>
       <button class="ghost" onclick="defenseSweep()">Run one defense sweep</button>
-      <div class="log" id="attackout"></div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="card" id="progcard">
+      <h3>live sweep <span id="progphase" class="mut"></span></h3>
+      <div id="progbarwrap" style="background:var(--panel2);border:1px solid var(--line);
+        border-radius:999px;height:14px;overflow:hidden;margin:6px 0">
+        <div id="progbar" style="height:100%;width:0;background:var(--cyan);
+          transition:width .3s"></div></div>
+      <div class="row" style="justify-content:space-between">
+        <span class="muted" id="progcur">idle</span>
+        <span class="muted" id="progstat"></span>
+      </div>
+      <div style="height:8px"></div>
+      <div id="progconfirmed"></div>
+      <div class="log" id="attackout" style="max-height:220px;overflow:auto"></div>
     </div>
   </section>
 
@@ -154,7 +171,8 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   tab=b.dataset.tab;
   document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x===b));
   ["monitor","attack","flags","config"].forEach(t=>$("#"+t).classList.toggle("hide",t!==tab));
-  if(tab==="flags")loadFlags(); if(tab==="config")loadConfig(); if(tab==="attack")loadTargets();
+  if(tab==="flags")loadFlags(); if(tab==="config")loadConfig();
+  if(tab==="attack"){loadTargets();pollProgress();}
 });
 
 function kpi(n,l,c){return `<div><div class="n" style="color:${c||'var(--cyan)'}">${n}</div><div class="l">${l}</div></div>`;}
@@ -173,6 +191,9 @@ async function tick(){
     s.integrity.map(i=>`<tr><td>${esc(i.path)}</td><td class="mut">${i.baseline} files</td><td>${i.clean?'<span class="up">clean</span>':`<span class="down">+${i.added} ~${i.modified} -${i.removed}</span>`}</td></tr>`).join("")+`</table>`:'<span class="mut">no paths watched</span>';
   $("#incidents").innerHTML=s.incidents.length?`<table><tr><th>severity</th><th>kind</th><th>summary</th></tr>`+
     s.incidents.map(i=>`<tr><td class="sev-${i.severity}">${i.severity}</td><td>${esc(i.kind)}</td><td>${esc(i.summary)}</td></tr>`).join("")+`</table>`:'<span class="up">no incidents this sweep</span>';
+  window._shells=s.webshells||[];
+  $("#webshells").innerHTML=window._shells.length?`<table><tr><th>path</th><th>signatures</th><th>action</th></tr>`+
+    window._shells.map((w,i)=>`<tr><td class="mono down">${esc(w.path)}</td><td class="mut">${esc((w.signatures||[]).join(", "))}</td><td><button class="act" onclick="quarantineIdx(${i})">Quarantine</button></td></tr>`).join("")+`</table>`:'<span class="up">none detected in watched roots</span>';
   $("#flagsum").innerHTML=`<table>
     <tr><td class="mut">total</td><td><b>${s.flags.total}</b></td></tr>
     <tr><td class="mut">VALIDATED</td><td class="up">${fv.VALIDATED||0}</td></tr>
@@ -190,13 +211,42 @@ async function loadTargets(){
       const btn=t.owner==="opponent"?`<button class="act" onclick="sweep('${esc(t.host)}',${t.ports[0]||80})">Sweep</button>`:'<span class="mut">self</span>';
       return `<tr><td>${esc(t.name)}</td><td class="mono">${esc(hp)}</td><td>${esc(t.kind)}</td><td class="${t.owner==='opponent'?'down':'up'}">${esc(t.owner)}</td><td>${btn}</td></tr>`;}).join("")+`</table>`;
 }
+let progTimer=null;
 async function sweep(host,port){
-  $("#attackout").textContent=`▶ sweeping ${host}:${port} … (recon + login + arsenal)`;
   const r=await postJSON("/api/attack/sweep",{host,port});
   if(r.error){$("#attackout").textContent="✗ "+r.error;return;}
-  $("#attackout").textContent=`${r.authenticated?('✓ logged in as '+r.login_as+'\n'):''}${r.summary}\nconfirmed: ${(r.confirmed||[]).join(", ")||'—'}\n→ check the Flags tab (PENDING; you submit).`;
+  $("#attackout").textContent=`▶ round ${r.round}: sweeping ${host}:${port} …`;
+  startProgress();
+}
+function startProgress(){if(progTimer)clearInterval(progTimer);pollProgress();progTimer=setInterval(pollProgress,1200);}
+async function pollProgress(){
+  let p; try{p=await getJSON("/api/attack/progress");}catch(e){return;}
+  if(!p||p.status==="idle"){$("#progcur").textContent="idle — pick a target above and hit Sweep";return;}
+  const pct=p.total?Math.round(100*p.index/p.total):(p.status==="done"?100:5);
+  $("#progbar").style.width=pct+"%";
+  $("#progbar").style.background=p.status==="error"?"var(--red)":(p.status==="done"?"var(--green)":"var(--cyan)");
+  $("#progphase").textContent="· "+(p.status==="running"?(p.phase||""):(p.status||""));
+  $("#progcur").textContent=p.status==="running"
+    ?(p.current?("running "+p.current+"  ("+p.index+"/"+p.total+")"):(p.phase||"working…"))
+    :(p.summary||"");
+  $("#progstat").innerHTML=`round <b>${p.round||"-"}</b> · confirmed <b>${(p.confirmed||[]).length}</b> · flags <b style="color:var(--green)">${p.flags||0}</b>`+
+    (p.authenticated?` · <span class="up">logged in${p.login_as?(" as "+esc(p.login_as)):""}</span>`:"");
+  $("#progconfirmed").innerHTML=(p.confirmed||[]).length
+    ?'<div class="row">'+p.confirmed.map(m=>`<span class="pill" style="background:#07140f;color:var(--green);border:1px solid var(--green)">${esc(m)}</span>`).join(" ")+'</div>':"";
+  $("#attackout").textContent=(p.log||[]).join("\n");
+  $("#attackout").scrollTop=$("#attackout").scrollHeight;
+  if(p.status!=="running"){if(progTimer){clearInterval(progTimer);progTimer=null;}}
 }
 async function defenseSweep(){const r=await postJSON("/api/defense/sweep",{});$("#attackout").textContent=`defense sweep: ${r.incidents} incident(s)`;}
+async function quarantineIdx(i){
+  const w=(window._shells||[])[i]; if(!w)return;
+  if(!confirm("Quarantine (back up + move out of web root) "+w.path+" ?"))return;
+  $("#wsout").textContent="quarantining "+w.path+" … (backup → move → functional test → verify)";
+  const r=await postJSON("/api/defense/quarantine",{path:w.abs_path});
+  if(r.error){$("#wsout").textContent="✗ "+r.error;return;}
+  $("#wsout").textContent=`${r.outcome}${r.safe?" ✓ safe":""}: ${r.detail}\n`+(r.steps||[]).join("\n");
+  tick();
+}
 
 async function loadFlags(){
   const show=$("#reveal").checked?1:0;

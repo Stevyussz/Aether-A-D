@@ -48,6 +48,11 @@ class Backend:
         self.defense = None
         self.sweeps = 0
         self.started = time.time()
+        # Live attack panel state (updated from the sweep's progress callback).
+        self._attack_lock = threading.Lock()
+        self._attack_future = None
+        self.rounds = 0
+        self.attack: dict = {"status": "idle", "log": []}
 
     # --- lifecycle --------------------------------------------------------------------
     def start(self) -> None:
@@ -108,6 +113,11 @@ class Backend:
             by_val[f["validation"]] = by_val.get(f["validation"], 0) + 1
             by_sub[f["submission"]] = by_sub.get(f["submission"], 0) + 1
 
+        try:
+            shells = self.defense.scan_webshells()
+        except Exception:  # noqa: BLE001
+            shells = []
+
         return {
             "tick": (None if tinfo is None else
                      {"tick": tinfo.tick, "next_in": round(tinfo.seconds_to_next, 1)}),
@@ -126,6 +136,9 @@ class Backend:
                            "removed": len(rep.removed)}
                           for name, (bn, rep) in integrity.items()],
             "flags": {"total": len(flags), "by_validation": by_val, "by_submission": by_sub},
+            "webshells": [{"path": h.path, "abs_path": h.abs_path,
+                           "signatures": list(h.signatures), "snippet": h.snippet}
+                          for h in shells],
             "mods": [{"ts": (m.get("ts") or "")[11:19], "component": m.get("component", ""),
                       "action": m.get("action", ""), "target": m.get("target") or ""}
                      for m in mods[:8]],
@@ -166,29 +179,123 @@ class Backend:
         }
 
     # --- mutating actions (token-gated) -----------------------------------------------
-    def sweep(self, host: str, port: int | None) -> dict:
-        return self._call(self._sweep(host, port), timeout=600)
+    def start_sweep(self, host: str, port: int | None) -> dict:
+        """Kick off a sweep in the background and stream progress via :meth:`attack_progress`.
 
-    async def _sweep(self, host: str, port: int | None) -> dict:
+        The scope check is synchronous so an out-of-scope request is refused immediately
+        (fail closed). An in-scope sweep runs on the background loop; the UI polls
+        ``/api/attack/progress`` to watch it live.
+        """
+        port_by_host = {t.host: (t.ports[0] if t.ports else 80) for t in self.cfg.scope.targets}
+        p = port or port_by_host.get(host, 80)
+        with self._attack_lock:
+            if self.attack.get("status") == "running":
+                return {"error": "a sweep is already running — wait for it to finish"}
+        if not self.orch.scope.check(host, p).allowed:
+            return {"error": f"{host}:{p} is NOT in authorized scope (fail closed)"}
+        with self._attack_lock:
+            self.rounds += 1
+            self.attack = {
+                "status": "running", "host": host, "port": p, "round": self.rounds,
+                "phase": "queued", "index": 0, "total": 0, "current": "",
+                "confirmed": [], "flags": 0, "authenticated": False, "login_as": None,
+                "summary": "", "started": time.time(),
+                "log": [f"round {self.rounds}: ▶ sweep {host}:{p} (recon + login + arsenal)"],
+            }
+        self._attack_future = asyncio.run_coroutine_threadsafe(
+            self._sweep_tracked(host, p), self.loop)
+        return {"started": True, "host": host, "port": p, "round": self.rounds}
+
+    def attack_progress(self) -> dict:
+        with self._attack_lock:
+            snap = dict(self.attack)
+            snap["log"] = list(self.attack.get("log", []))
+            snap["confirmed"] = list(self.attack.get("confirmed", []))
+            return snap
+
+    def _on_progress(self, ev: dict) -> None:
+        phase = ev.get("phase", "")
+        with self._attack_lock:
+            a = self.attack
+            a["phase"] = phase
+            log = a.setdefault("log", [])
+            if phase == "recon":
+                log.append("• recon: crawling the target…")
+            elif phase == "recon_done":
+                log.append(f"• recon: {ev.get('endpoints', 0)} endpoint(s), "
+                           f"{ev.get('params', 0)} param(s)")
+            elif phase == "login":
+                log.append("• login: attempting authentication…")
+            elif phase == "login_done":
+                a["authenticated"] = bool(ev.get("authenticated"))
+                a["login_as"] = ev.get("as")
+                log.append(f"✓ logged in as {ev.get('as')}" if ev.get("authenticated")
+                           else "• login: no credentials worked")
+            elif phase == "arsenal":
+                a["total"] = ev.get("total", 0)
+                log.append(f"• arsenal: {ev.get('total', 0)} module(s) to run")
+            elif phase == "module_start":
+                a["index"] = ev.get("index", a.get("index", 0))
+                a["total"] = ev.get("total", a.get("total", 0))
+                a["current"] = ev.get("module", "")
+            elif phase == "module":
+                a["index"] = ev.get("index", a.get("index", 0))
+                if ev.get("confirmed"):
+                    mod = ev.get("module", "")
+                    if mod not in a["confirmed"]:
+                        a["confirmed"].append(mod)
+                    a["flags"] += ev.get("flags", 0)
+                    log.append(f"  ✓ {mod} CONFIRMED ({ev.get('flags', 0)} flag)")
+            if len(log) > 80:
+                a["log"] = log[-80:]
+
+    async def _sweep_tracked(self, host: str, port: int) -> None:
         from ..attack.engine import AttackEngine
         from ..attack.memory import ExploitMemory
         from ..attack.sweep import AttackSweep
         from ..core.plugin import RunContext
 
         kind_by_host = {t.host: t.kind for t in self.cfg.scope.targets}
-        port_by_host = {t.host: (t.ports[0] if t.ports else 80) for t in self.cfg.scope.targets}
-        p = port or port_by_host.get(host, 80)
-        if not self.orch.scope.check(host, p).allowed:
-            return {"error": f"{host}:{p} is NOT in authorized scope (fail closed)"}
-        sweep = AttackSweep(AttackEngine(self.orch, self.inbox),
-                            memory=ExploitMemory(self.orch.state))
-        report = await sweep.run(
-            RunContext(target_host=host, target_port=p,
-                       service=kind_by_host.get(host, "web")),
-            recon=True, login=True)
-        return {"summary": report.summary(), "confirmed": report.confirmed_modules,
-                "flags": len(report.flags_found), "authenticated": report.authenticated,
-                "login_as": report.login_as}
+        try:
+            sweep = AttackSweep(AttackEngine(self.orch, self.inbox),
+                                memory=ExploitMemory(self.orch.state))
+            report = await sweep.run(
+                RunContext(target_host=host, target_port=port,
+                           service=kind_by_host.get(host, "web")),
+                recon=True, login=True, progress=self._on_progress)
+            with self._attack_lock:
+                a = self.attack
+                a["status"] = "done"
+                a["phase"] = "done"
+                a["summary"] = report.summary()
+                a["confirmed"] = list(report.confirmed_modules)
+                a["flags"] = len(report.flags_found)
+                a["authenticated"] = report.authenticated
+                a["login_as"] = report.login_as
+                a.setdefault("log", []).append(
+                    f"✓ done — {report.summary()} → check the Flags tab (PENDING; you submit)")
+        except Exception as exc:  # noqa: BLE001
+            with self._attack_lock:
+                self.attack["status"] = "error"
+                self.attack["phase"] = "error"
+                self.attack["summary"] = f"{type(exc).__name__}: {exc}"
+                self.attack.setdefault("log", []).append(f"✗ {type(exc).__name__}: {exc}")
+
+    def quarantine(self, abs_path: str) -> dict:
+        return self._call(self._quarantine(abs_path), timeout=120)
+
+    async def _quarantine(self, abs_path: str) -> dict:
+        if not abs_path:
+            return {"error": "no path given"}
+        # Only quarantine a file inside one of our watched (self-owned) roots — fail closed.
+        from pathlib import Path as _P
+        target = _P(abs_path).resolve()
+        roots = [r.resolve() for r in self.defense._roots.values()]
+        if not any(str(target).startswith(str(r) + "/") or target == r for r in roots):
+            return {"error": "refused: path is not inside a watched self-owned root"}
+        result = await self.defense.quarantine_webshell(target)
+        return {"outcome": result.outcome.value, "safe": result.safe,
+                "steps": result.steps, "detail": result.detail}
 
     def defense_sweep(self) -> dict:
         return self._call(self._defense_sweep())
@@ -260,6 +367,8 @@ def _make_handler(backend: Backend, token: str):
                     self.wfile.write(body)
                 elif path == "/api/state":
                     _json(self, backend.state())
+                elif path == "/api/attack/progress":
+                    _json(self, backend.attack_progress())
                 elif path == "/api/flags":
                     _json(self, backend.flags(q.get("show", ["0"])[0] == "1"))
                 elif path == "/api/config":
@@ -282,10 +391,12 @@ def _make_handler(backend: Backend, token: str):
                 payload = {}
             try:
                 if path == "/api/attack/sweep":
-                    _json(self, backend.sweep(payload.get("host", ""),
-                                              payload.get("port")))
+                    _json(self, backend.start_sweep(payload.get("host", ""),
+                                                    payload.get("port")))
                 elif path == "/api/defense/sweep":
                     _json(self, backend.defense_sweep())
+                elif path == "/api/defense/quarantine":
+                    _json(self, backend.quarantine(payload.get("path", "")))
                 elif path == "/api/flags/mark":
                     _json(self, backend.mark(payload.get("key", ""),
                                              payload.get("status", "SUBMITTED")))
