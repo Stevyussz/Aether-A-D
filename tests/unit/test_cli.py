@@ -15,6 +15,13 @@ def test_version():
     assert "AETHER" in r.stdout
 
 
+def test_lab_serve_rejects_unknown_vuln_class():
+    # The practice target refuses an unknown --only class (fail fast, before binding).
+    r = runner.invoke(app, ["lab", "serve", "--only", "not_a_real_vuln"])
+    assert r.exit_code == 1
+    assert "unknown vuln" in (r.output + str(r.stderr or "")).lower()
+
+
 def test_system_health_passes():
     r = runner.invoke(app, ["system", "health"])
     assert r.exit_code == 0

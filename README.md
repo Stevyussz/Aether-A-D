@@ -43,6 +43,8 @@ is deliberately left pending). See:
 
 - `docs/PREP-4DAYS.md` — **focused 4-day study plan** (what to learn/skip within scope, exact
   THM/VulnHub rooms, skills to master, tricks) for a team new to A&D with little time
+- `docs/DEFENSE-AND-LAB.md` — **how to patch without being a coder** (file/config/edge layers,
+  sink table) and **how to practice A&D with your own VMs** (`aether lab serve`, VulnHub, DVWA)
 - `docs/STRATEGY.md` — **A&D game plan for a team new to Attack & Defense** (roles, first 5
   minutes, the per-tick loop, scoring model, beginner mistakes, game-day checklist)
 - `docs/CHEATSHEET.md` — quick command reference: AETHER + the manual bits (enumeration,

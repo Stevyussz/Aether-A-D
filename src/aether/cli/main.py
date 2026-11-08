@@ -1068,6 +1068,63 @@ def monitor_stop() -> None:
     console.print("[green]✓ stop signal written (runtime/monitor.stop)[/]")
 
 
+@lab_app.command("serve")
+def lab_serve(
+    host: str = typer.Option("127.0.0.1", "--host",
+                             help="Bind address. Use 0.0.0.0 to reach it from another VM."),
+    port: int = typer.Option(8098, "--port", help="Port to listen on."),
+    flag: str = typer.Option("IONIC{vuln_lab_demo}", "--flag", help="Flag the service hides."),
+    only: str = typer.Option(None, "--only",
+                             help="Comma list of vuln classes to enable (default: all)."),
+) -> None:
+    """Run the deliberately-vulnerable lab web service as a LIVE target (Ctrl-C to stop).
+
+    Use this to practice the full Attack & Defense loop with your own VMs: run it on one VM
+    (``--host 0.0.0.0``), then from another machine point AETHER at it
+    (``aether attack sweep <that-ip>``) to practice ATTACK, and edit ``lab/web/vuln_service.py``
+    to practice DEFENSE (patch a class, restart, confirm the sweep no longer finds the flag).
+
+    SAFETY: this is intentionally vulnerable — only ever run it on an isolated lab network you
+    control, NEVER on the real competition network or a public interface.
+    """
+    import sys as _sys
+    import threading as _th
+
+    lab_dir = Path(__file__).resolve().parents[3] / "lab" / "web"
+    _sys.path.insert(0, str(lab_dir))
+    try:
+        from vuln_service import ALL_VULNS, VulnLabService  # type: ignore
+    except ImportError:
+        err_console.print("[red]✗ lab service not found[/]")
+        raise typer.Exit(1)
+
+    enabled = ALL_VULNS
+    if only:
+        wanted = frozenset(x.strip() for x in only.split(",") if x.strip())
+        unknown = wanted - ALL_VULNS
+        if unknown:
+            err_console.print(f"[red]✗ unknown vuln class(es): {sorted(unknown)}[/]")
+            err_console.print(f"[dim]valid: {sorted(ALL_VULNS)}[/]")
+            raise typer.Exit(1)
+        enabled = wanted
+
+    if host not in ("127.0.0.1", "localhost"):
+        console.print("[yellow]⚠ binding beyond localhost — isolated lab network ONLY, "
+                      "never the competition or a public network.[/]")
+    svc = VulnLabService(flag, host=host, port=port, enabled=enabled).start()
+    console.print(f"[bold red]VULN lab target[/] → [cyan]http://{svc.host}:{svc.port}/[/]  "
+                  f"[dim]({len(enabled)} vuln class(es))[/]")
+    console.print(f"[dim]attack it:  aether attack sweep {svc.host if host!='0.0.0.0' else '<this-vm-ip>'}"
+                  f" --cred admin:admin[/]")
+    console.print("[dim]Ctrl-C to stop[/]")
+    try:
+        _th.Event().wait()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]stopping lab target…[/]")
+    finally:
+        svc.stop()
+
+
 @lab_app.command("test")
 def lab_test(
     flag: str = typer.Option("CTF{aether_lab_selftest}", "--flag", help="Lab flag value."),

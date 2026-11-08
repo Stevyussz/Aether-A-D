@@ -178,6 +178,9 @@ functional test fails, so your flag store and service behavior are preserved.
 ## 5. Sanity checks you can run any time
 
 ```bash
+.venv/bin/aether lab serve --host 0.0.0.0 --port 8080 # run the vuln target LIVE for A&D practice
+#   (isolated lab network ONLY) — attack it from another VM, then patch it and re-sweep.
+#   See docs/DEFENSE-AND-LAB.md for the full self-simulation + how to patch without coding.
 .venv/bin/aether lab test                             # full pipeline against a local lab flag
 .venv/bin/python scripts/acceptance_check.py          # BLUEPRINT §9 self-check
 .venv/bin/python scripts/measure_resources.py         # real resource numbers

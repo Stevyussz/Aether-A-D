@@ -48,7 +48,9 @@ Urut dari dampak terbesar:
 - **TryHackMe** (utama, paling ramah pemula & paling mirip scope): buat akun, `OpenVPN`/AttackBox.
 - **VulnHub** (gratis, lokal via VirtualBox): download 2–3 VM gaya boot2root.
 - **GTFOBins** & **PayloadsAllTheThings** & **HackTricks**: bookmark, ini "kamus" saat lomba.
-- **AETHER lab lokal**: `aether lab test` harus hijau — ini tempat latihan defense kalian.
+- **AETHER lab lokal**: `aether lab test` harus hijau. Untuk **simulasi A&D penuh** (serang +
+  patch) pakai `aether lab serve` — lihat **[DEFENSE-AND-LAB.md](DEFENSE-AND-LAB.md)** (juga:
+  cara nge-patch walau belum jago koding).
 
 ---
 
