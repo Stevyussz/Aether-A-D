@@ -477,6 +477,10 @@ def attack_sweep(
     login: bool = typer.Option(True, "--login/--no-login",
                                help="Auto-login first (default/weak or --cred creds), then "
                                     "attack BEHIND the session."),
+    tools: bool = typer.Option(False, "--tools/--no-tools",
+                               help="Also drive installed external scanners first "
+                                    "(nmap/rustscan ports, gobuster/ffuf paths, whatweb tech) "
+                                    "to widen the attack surface."),
     cred: list[str] = typer.Option(None, "--cred",
                                    help="Credential to try as user:pass (repeatable)."),
 ) -> None:
@@ -549,7 +553,13 @@ def attack_sweep(
                                service=kind_by_host.get(h, "web"), extra=dict(extra)),
                     recon=recon,
                     login=login,
+                    tools=tools,
                 )
+                if report.open_ports:
+                    console.print(f"  [cyan]ports:[/] " + ", ".join(
+                        f"{s['port']}/{s.get('service','?')}" for s in report.open_ports[:12]))
+                if report.fingerprints:
+                    console.print(f"  [cyan]tech:[/] " + ", ".join(report.fingerprints[:8]))
                 if report.authenticated:
                     console.print(f"  [green]✓ logged in as {report.login_as} "
                                   f"at {report.login_endpoint} — attacking authenticated[/]")
@@ -566,6 +576,75 @@ def attack_sweep(
             _render_flag_table(rows, "PENDING flags (operator submits manually)", show)
             console.print("[dim]AETHER never submits. Review, then submit on the official "
                           "portal yourself.[/]")
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(_run())
+
+
+@attack_app.command("recon")
+def attack_recon(
+    host: str = typer.Argument(..., help="Authorized host to scan."),
+    port: int = typer.Option(None, "--port", "-p", help="Target port (default: from scope/80)."),
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+) -> None:
+    """Drive installed external scanners (nmap/rustscan, gobuster/ffuf, whatweb) at a target.
+
+    Read-only discovery, scope-enforced. Shows open ports+services, discovered paths, and the
+    detected tech stack — the same intel `sweep --tools` feeds into the exploit arsenal.
+    """
+    import asyncio
+
+    from ..attack.engine import AttackEngine
+    from ..attack.flags.inbox import FlagInbox
+    from ..attack.flags.validator import FlagValidator
+    from ..attack.recon.tool_recon import ToolReconModule
+    from ..attack.recon.toolscan import detect_tools
+    from ..core.orchestrator import Orchestrator
+    from ..core.plugin import RunContext
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    installed = [t for t, ok in detect_tools().items() if ok]
+    console.print(f"[dim]external tools detected: {', '.join(installed) or 'none (python fallback)'}[/]")
+    p = port or next((t.ports[0] for t in cfg.scope.targets
+                      if t.host == host and t.ports), 80)
+
+    async def _run():
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            if not orch.scope.check(host, p).allowed:
+                err_console.print(f"[red]✗ {host}:{p} is NOT in authorized scope (fail closed)[/]")
+                raise typer.Exit(1)
+            inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern or r"IONIC\{[^}]+\}"))
+            engine = AttackEngine(orch, inbox)
+            kind = next((t.kind for t in cfg.scope.targets if t.host == host), "web")
+            console.print(f"[cyan]▶ recon {host}:{p} …[/] [dim](this may take a bit)[/]")
+            res = await engine.recon(ToolReconModule(),
+                                     RunContext(target_host=host, target_port=p, service=kind))
+            data = res.data
+            ports = data.get("open_ports", [])
+            if ports:
+                t = Table(title=f"Open ports — {host}")
+                t.add_column("port"); t.add_column("service"); t.add_column("product")
+                for s in ports:
+                    t.add_row(str(s["port"]), s.get("service", "?"), s.get("product", ""))
+                console.print(t)
+            paths = data.get("discovered_paths", [])
+            if paths:
+                t = Table(title="Discovered paths")
+                t.add_column("path"); t.add_column("status")
+                for pth in paths[:40]:
+                    t.add_row(pth.get("path", ""), str(pth.get("status", "")))
+                console.print(t)
+            if data.get("fingerprints"):
+                console.print("[cyan]tech:[/] " + ", ".join(data["fingerprints"]))
+            console.print(f"[green]{res.detail}[/]")
         finally:
             await orch.shutdown()
 
@@ -664,6 +743,9 @@ def attack_loop(
                                help="Crawl each target first to aim payloads (smarter)."),
     login: bool = typer.Option(True, "--login/--no-login",
                                help="Auto-login each round, then attack behind the session."),
+    tools: bool = typer.Option(False, "--tools/--no-tools",
+                               help="Drive external scanners (nmap/rustscan/gobuster/ffuf/"
+                                    "whatweb) on the FIRST round to widen the surface."),
     cred: list[str] = typer.Option(None, "--cred",
                                    help="Credential user:pass to try (repeatable)."),
 ) -> None:
@@ -734,6 +816,7 @@ def attack_loop(
                                    service=kind_by_host.get(h, "web"), extra=dict(extra)),
                         recon=recon,
                         login=login,
+                        tools=(tools and rounds == 1),   # heavy scans once, not every tick
                     )
                     new_flags += len(report.flags_found)
                 total = len(await inbox.list())

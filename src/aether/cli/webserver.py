@@ -179,7 +179,7 @@ class Backend:
         }
 
     # --- mutating actions (token-gated) -----------------------------------------------
-    def start_sweep(self, host: str, port: int | None) -> dict:
+    def start_sweep(self, host: str, port: int | None, tools: bool = True) -> dict:
         """Kick off a sweep in the background and stream progress via :meth:`attack_progress`.
 
         The scope check is synchronous so an out-of-scope request is refused immediately
@@ -199,11 +199,13 @@ class Backend:
                 "status": "running", "host": host, "port": p, "round": self.rounds,
                 "phase": "queued", "index": 0, "total": 0, "current": "",
                 "confirmed": [], "flags": 0, "authenticated": False, "login_as": None,
-                "summary": "", "started": time.time(),
-                "log": [f"round {self.rounds}: ▶ sweep {host}:{p} (recon + login + arsenal)"],
+                "summary": "", "started": time.time(), "open_ports": [], "fingerprints": [],
+                "log": [f"round {self.rounds}: ▶ sweep {host}:{p}"
+                        + (" (tools + recon + login + arsenal)" if tools
+                           else " (recon + login + arsenal)")],
             }
         self._attack_future = asyncio.run_coroutine_threadsafe(
-            self._sweep_tracked(host, p), self.loop)
+            self._sweep_tracked(host, p, tools), self.loop)
         return {"started": True, "host": host, "port": p, "round": self.rounds}
 
     def attack_progress(self) -> dict:
@@ -219,7 +221,12 @@ class Backend:
             a = self.attack
             a["phase"] = phase
             log = a.setdefault("log", [])
-            if phase == "recon":
+            if phase == "tools":
+                log.append("• tools: running external scanners (nmap/rustscan/gobuster/whatweb)…")
+            elif phase == "tools_done":
+                log.append(f"• tools: {ev.get('ports', 0)} open port(s), "
+                           f"{ev.get('paths', 0)} path(s), {ev.get('tech', 0)} tech token(s)")
+            elif phase == "recon":
                 log.append("• recon: crawling the target…")
             elif phase == "recon_done":
                 log.append(f"• recon: {ev.get('endpoints', 0)} endpoint(s), "
@@ -249,7 +256,7 @@ class Backend:
             if len(log) > 80:
                 a["log"] = log[-80:]
 
-    async def _sweep_tracked(self, host: str, port: int) -> None:
+    async def _sweep_tracked(self, host: str, port: int, tools: bool = True) -> None:
         from ..attack.engine import AttackEngine
         from ..attack.memory import ExploitMemory
         from ..attack.sweep import AttackSweep
@@ -262,7 +269,7 @@ class Backend:
             report = await sweep.run(
                 RunContext(target_host=host, target_port=port,
                            service=kind_by_host.get(host, "web")),
-                recon=True, login=True, progress=self._on_progress)
+                recon=True, login=True, tools=tools, progress=self._on_progress)
             with self._attack_lock:
                 a = self.attack
                 a["status"] = "done"
@@ -272,6 +279,8 @@ class Backend:
                 a["flags"] = len(report.flags_found)
                 a["authenticated"] = report.authenticated
                 a["login_as"] = report.login_as
+                a["open_ports"] = list(report.open_ports)
+                a["fingerprints"] = list(report.fingerprints)
                 a.setdefault("log", []).append(
                     f"✓ done — {report.summary()} → check the Flags tab (PENDING; you submit)")
         except Exception as exc:  # noqa: BLE001
@@ -448,7 +457,8 @@ def _make_handler(backend: Backend, token: str):
             try:
                 if path == "/api/attack/sweep":
                     _json(self, backend.start_sweep(payload.get("host", ""),
-                                                    payload.get("port")))
+                                                    payload.get("port"),
+                                                    bool(payload.get("tools", True))))
                 elif path == "/api/defense/sweep":
                     _json(self, backend.defense_sweep())
                 elif path == "/api/defense/quarantine":

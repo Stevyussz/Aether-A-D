@@ -112,6 +112,8 @@ class SweepReport:
     authenticated: bool = False
     login_as: str | None = None
     login_endpoint: str | None = None
+    open_ports: list[dict] = field(default_factory=list)
+    fingerprints: list[str] = field(default_factory=list)
 
     @property
     def modules_run(self) -> int:
@@ -154,6 +156,13 @@ class AttackSweep:
             return [], []
         return list(res.data.get("endpoints", [])), list(res.data.get("params", []))
 
+    async def _toolscan(self, context: RunContext) -> dict:
+        """Run installed external scanners (nmap/rustscan/gobuster/ffuf/whatweb). Best-effort."""
+        from .recon.tool_recon import ToolReconModule
+
+        res = await self.engine.recon(ToolReconModule(), context)
+        return dict(res.data) if res.ok else {}
+
     async def _login(self, context: RunContext) -> tuple[dict, str | None, str | None]:
         """Try to log in; return (cookies, username, endpoint). Empty cookies on failure."""
         from .recon.web_auth import WebLoginModule
@@ -176,11 +185,23 @@ class AttackSweep:
         plugins: list[ExploitPlugin] | None = None,
         recon: bool = False,
         login: bool = False,
+        tools: bool = False,
         progress: ProgressCb | None = None,
     ) -> SweepReport:
         plugins = plugins if plugins is not None else exploits_for(context.service)
         report = SweepReport(target=context.target_host or "unknown")
         _emit(progress, {"phase": "start", "target": report.target})
+
+        # External tools (nmap/rustscan/gobuster/ffuf/whatweb) — discover more surface first.
+        if tools:
+            _emit(progress, {"phase": "tools"})
+            tdata = await self._toolscan(context)
+            report.open_ports = list(tdata.get("open_ports", []))
+            report.fingerprints = list(tdata.get("fingerprints", []))
+            _emit(progress, {"phase": "tools_done",
+                             "ports": len(report.open_ports),
+                             "paths": len(tdata.get("discovered_paths", [])),
+                             "tech": len(report.fingerprints)})
 
         # Exploit farm: run modules that previously confirmed on this target FIRST.
         if self.memory is not None:
