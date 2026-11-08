@@ -16,6 +16,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -23,7 +24,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 ALL_VULNS = frozenset({
     "exposed_files", "path_traversal", "sqli", "command_injection", "ssti",
     "nosqli", "default_creds", "idor", "ssrf", "xxe", "graphql",
-    "elasticsearch", "jwt", "deserialization",
+    "elasticsearch", "jwt", "deserialization", "file_upload",
 })
 
 # Secrets the JWT double will accept an HS256 token signed with (weak-secret bypass).
@@ -142,6 +143,8 @@ def _page(body: str, status: int = 200) -> tuple[int, str]:
 
 
 def make_handler(flag: str, enabled: frozenset[str]):
+    uploaded_shells: set[str] = set()   # basenames of web shells "stored" via file upload
+
     def decide(method: str, path: str, query: str, body: str,
                headers: dict | None = None) -> tuple[int, str]:
         raw_q = unquote(query)
@@ -151,6 +154,18 @@ def make_handler(flag: str, enabled: frozenset[str]):
         headers = headers or {}
         cookie = headers.get("Cookie", "")
         authz = headers.get("Authorization", "")
+
+        # 0. Unrestricted file upload -> web shell -> read flag (two-step, stateful).
+        if "file_upload" in enabled:
+            if method == "POST" and "<?php" in body and _is_flag_read_cmd(body):
+                m = re.search(r'filename="([^"]+)"', body)
+                if m:
+                    uploaded_shells.add(m.group(1).rsplit("/", 1)[-1])
+                    return _page(f"file uploaded to /uploads/{m.group(1)}")
+                return _page("file uploaded")
+            base = path.rsplit("/", 1)[-1]
+            if method == "GET" and base and base in uploaded_shells:
+                return _page(flag)      # requesting the planted shell executes it -> flag
 
         # 1. Exposed flag endpoints / files.
         if "exposed_files" in enabled and path.rstrip("/") in {p.rstrip("/") for p in _DEFAULT_PATHS}:

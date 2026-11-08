@@ -20,6 +20,7 @@ from aether.attack.exploits.web_default_creds import DefaultCredsExploit  # noqa
 from aether.attack.exploits.web_deserialization import DeserializationExploit  # noqa: E402
 from aether.attack.exploits.web_elasticsearch import ElasticsearchExploit  # noqa: E402
 from aether.attack.exploits.web_exposed_files import ExposedFilesExploit  # noqa: E402
+from aether.attack.exploits.web_file_upload import FileUploadExploit  # noqa: E402
 from aether.attack.exploits.web_graphql import GraphqlExploit  # noqa: E402
 from aether.attack.exploits.web_idor import IdorExploit  # noqa: E402
 from aether.attack.exploits.web_jwt import JwtWeaknessExploit  # noqa: E402
@@ -44,8 +45,8 @@ PATTERN = r"IONIC\{[^}]+\}"
 
 MODULES = [
     ExposedFilesExploit, PathTraversalExploit, SqlInjectionExploit, CommandInjectionExploit,
-    SstiExploit, NoSqlInjectionExploit, DefaultCredsExploit, IdorExploit, SsrfExploit,
-    XxeExploit, GraphqlExploit, ElasticsearchExploit, JwtWeaknessExploit,
+    SstiExploit, FileUploadExploit, NoSqlInjectionExploit, DefaultCredsExploit, IdorExploit,
+    SsrfExploit, XxeExploit, GraphqlExploit, ElasticsearchExploit, JwtWeaknessExploit,
     DeserializationExploit,
 ]
 
@@ -55,6 +56,7 @@ ISOLATED = {
     ElasticsearchExploit: frozenset({"elasticsearch"}),
     JwtWeaknessExploit: frozenset({"jwt"}),
     DeserializationExploit: frozenset({"deserialization"}),
+    FileUploadExploit: frozenset({"file_upload"}),
 }
 
 

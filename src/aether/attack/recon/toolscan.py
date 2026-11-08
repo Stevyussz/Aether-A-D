@@ -34,6 +34,12 @@ COMMON_PATHS: tuple[str, ...] = (
     "console", "shell", "cmd", "status", "health", "metrics", "graphql", "swagger",
     "swagger.json", "openapi.json", "static", "assets", "images", "tmp", "data", "logs",
     "user", "users", "account", "profile", "search", "home", "index.php", "server-info",
+    # common deliberately/accidentally-vulnerable script names (feed injection modules)
+    "lfi.php", "rfi.php", "file.php", "files.php", "download.php", "download", "view.php",
+    "page.php", "include.php", "inc.php", "image.php", "img.php", "read.php", "doc.php",
+    "fileview.php", "show.php", "load.php", "cmd.php", "exec.php", "ping.php", "upload.php",
+    "phpinfo.php", "info.php", "test.php", "shell.php", "backup.zip", "backup.tar.gz",
+    "db.sql", "database.sql", "dump.sql", "config.php.bak", "index.php.bak", "www.zip",
 )
 
 

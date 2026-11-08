@@ -26,6 +26,7 @@ from .exploits.web_default_creds import DefaultCredsExploit
 from .exploits.web_deserialization import DeserializationExploit
 from .exploits.web_elasticsearch import ElasticsearchExploit
 from .exploits.web_exposed_files import ExposedFilesExploit
+from .exploits.web_file_upload import FileUploadExploit
 from .exploits.web_graphql import GraphqlExploit
 from .exploits.web_idor import IdorExploit
 from .exploits.web_jwt import JwtWeaknessExploit
@@ -57,6 +58,7 @@ WEB_EXPLOITS: tuple[type[ExploitPlugin], ...] = (
     SqlInjectionExploit,
     CommandInjectionExploit,
     SstiExploit,
+    FileUploadExploit,
     NoSqlInjectionExploit,
     DefaultCredsExploit,
     IdorExploit,
