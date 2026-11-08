@@ -10,6 +10,8 @@ continuous objectives during an authorized Attack & Defense competition:
    human operator for **manual** submission. Initial access is via the web, but A&D flags live
    on the **server filesystem** — so the RCE-capable modules read the flag off the server
    (`/root/root.txt`, `/home/*/user.txt`, or wherever a `grep` for the flag prefix finds it).
+   It **auto-logs-in** (default/weak or operator creds) to attack behind the login, and offers
+   read-only **priv-esc enumeration** (`id`/`sudo -l`/SUID/caps/cron) after a foothold.
 2. **DEFENSE** — monitor our own services, detect compromise, perform safe and reversible
    remediation, and preserve flag data, service functionality, and availability.
 
@@ -28,7 +30,7 @@ continuous objectives during an authorized Attack & Defense competition:
 
 ## Status
 
-**Release candidate.** All build phases implemented; 178 automated tests passing; 13/14
+**Release candidate.** All build phases implemented; 182 automated tests passing; 13/14
 acceptance criteria verified in the local lab (the last depends on the official briefing and
 is deliberately left pending). See:
 

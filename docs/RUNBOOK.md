@@ -40,6 +40,18 @@ intentional. Do not set `scope.enforce: false` during the competition.
 .venv/bin/aether attack sweep                   # omit host = sweep ALL in-scope opponents
 .venv/bin/aether attack sweep <host> --no-recon # skip the crawl (blind wordlists only)
 
+# BEHIND A LOGIN — sweep auto-logs-in first (default/weak creds), then attacks authenticated:
+.venv/bin/aether attack sweep <host>                      # --login is ON by default
+.venv/bin/aether attack sweep <host> --cred admin:hunter2 # add known creds (repeatable)
+.venv/bin/aether attack sweep <host> --no-login           # skip the login step
+#   On success you'll see "✓ logged in as <user> … — attacking authenticated"; every exploit
+#   module then carries the session cookie, so vulns hidden behind the login are reachable.
+
+# AFTER A FOOTHOLD — local priv-esc ENUMERATION (read-only; you escalate by hand):
+.venv/bin/aether attack privesc <host>                    # id / sudo -l / SUID / caps / cron
+#   Prints the intel it gathered through the command-injection vector. AETHER never escalates
+#   on its own — pick a SUID/sudo/cron/capability path and exploit it yourself.
+
 # CONTINUOUS — re-sweep every round (flags rotate each tick); set --interval to tick length:
 .venv/bin/aether attack loop --interval 60      # Ctrl-C or `aether attack stop` to end
 #   AETHER remembers which modules hit each target (the "exploit farm") and runs them FIRST

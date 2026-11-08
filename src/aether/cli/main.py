@@ -361,6 +361,11 @@ def attack_sweep(
     recon: bool = typer.Option(True, "--recon/--no-recon",
                                help="Crawl the target first and aim payloads at discovered "
                                     "endpoints/params (smarter, higher hit-rate)."),
+    login: bool = typer.Option(True, "--login/--no-login",
+                               help="Auto-login first (default/weak or --cred creds), then "
+                                    "attack BEHIND the session."),
+    cred: list[str] = typer.Option(None, "--cred",
+                                   help="Credential to try as user:pass (repeatable)."),
 ) -> None:
     """Run the full validated exploit arsenal against an authorized target.
 
@@ -418,7 +423,11 @@ def attack_sweep(
 
             inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
             sweep = AttackSweep(AttackEngine(orch, inbox), memory=ExploitMemory(orch.state))
-            extra = {"max_probes": max_probes} if max_probes else {}
+            extra = {}
+            if max_probes:
+                extra["max_probes"] = max_probes
+            if cred:
+                extra["credentials"] = list(cred)
             kind_by_host = {t.host: t.kind for t in cfg.scope.targets}
             for h, p in authorized:
                 console.print(f"[cyan]▶ sweeping {h}:{p} …[/]")
@@ -426,7 +435,11 @@ def attack_sweep(
                     RunContext(target_host=h, target_port=p,
                                service=kind_by_host.get(h, "web"), extra=dict(extra)),
                     recon=recon,
+                    login=login,
                 )
+                if report.authenticated:
+                    console.print(f"  [green]✓ logged in as {report.login_as} "
+                                  f"at {report.login_endpoint} — attacking authenticated[/]")
                 if report.fast_path:
                     console.print(f"  [dim]fast-path (learned): {', '.join(report.fast_path)}[/]")
                 if report.discovered_endpoints or report.discovered_params:
@@ -446,6 +459,83 @@ def attack_sweep(
     asyncio.run(_run())
 
 
+@attack_app.command("privesc")
+def attack_privesc(
+    host: str = typer.Argument(..., help="Authorized opponent host to enumerate."),
+    port: int = typer.Option(None, "--port", "-p", help="Target port (default: from scope)."),
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    recon: bool = typer.Option(True, "--recon/--no-recon", help="Crawl first to find the "
+                                                                "injection point."),
+    login: bool = typer.Option(True, "--login/--no-login", help="Log in first."),
+    cred: list[str] = typer.Option(None, "--cred", help="Credential user:pass (repeatable)."),
+) -> None:
+    """Read-only local priv-esc ENUMERATION via command injection (operator escalates by hand).
+
+    Runs id / sudo -l / SUID / capabilities / cron through the injection vector and prints what
+    came back. It never escalates on its own — it hands you the intel to decide the next step.
+    """
+    import asyncio
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    from ..attack.engine import AttackEngine
+    from ..attack.flags.inbox import FlagInbox
+    from ..attack.flags.validator import FlagValidator
+    from ..attack.sweep import AttackSweep
+    from ..core.orchestrator import Orchestrator
+    from ..core.plugin import RunContext
+
+    matches = [t for t in cfg.scope.targets if t.host == host]
+    p = port or (matches[0].ports[0] if matches and matches[0].ports else 80)
+
+    async def _run():
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            if not orch.scope.check(host, p).allowed:
+                err_console.print(f"[red]✗ {host}:{p} is NOT in authorized scope (fail closed).[/]")
+                raise typer.Exit(1)
+            inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
+            sweep = AttackSweep(AttackEngine(orch, inbox))
+            extra = {}
+            if cred:
+                extra["credentials"] = list(cred)
+            ctx = RunContext(target_host=host, target_port=p, service="web", extra=extra)
+            if recon:
+                eps, params = await sweep._recon(ctx)
+                if eps:
+                    ctx.extra["discovered_endpoints"] = eps
+                if params:
+                    ctx.extra["discovered_params"] = params
+            if login:
+                cookies, who, ep = await sweep._login(ctx)
+                if cookies:
+                    ctx.extra["cookies"] = cookies
+                    console.print(f"[green]✓ logged in as {who} at {ep}[/]")
+            console.print(f"[cyan]▶ enumerating {host}:{p} for priv-esc …[/]")
+            run = await sweep.privesc(ctx)
+            intel = run.result.data.get("intel", {})
+            if intel:
+                table = Table(title="priv-esc intel (read-only — you escalate manually)")
+                table.add_column("what", style="bold cyan")
+                table.add_column("observed")
+                for k, v in intel.items():
+                    table.add_row(k, v)
+                console.print(table)
+                console.print("[dim]Next step is yours: pick a SUID/sudo/cron/cap path and "
+                              "exploit it by hand. AETHER never escalates on its own.[/]")
+            else:
+                console.print(f"[yellow]{run.result.detail}[/]")
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(_run())
+
+
 @attack_app.command("loop")
 def attack_loop(
     host: str = typer.Argument(None, help="Authorized opponent host. Omit to sweep all "
@@ -459,6 +549,10 @@ def attack_loop(
     max_probes: int = typer.Option(None, "--max-probes", help="Cap probes per module."),
     recon: bool = typer.Option(True, "--recon/--no-recon",
                                help="Crawl each target first to aim payloads (smarter)."),
+    login: bool = typer.Option(True, "--login/--no-login",
+                               help="Auto-login each round, then attack behind the session."),
+    cred: list[str] = typer.Option(None, "--cred",
+                                   help="Credential user:pass to try (repeatable)."),
 ) -> None:
     """Continuously re-sweep authorized targets each round (flags rotate per tick).
 
@@ -512,6 +606,8 @@ def attack_loop(
         inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
         sweep = AttackSweep(AttackEngine(orch, inbox), memory=ExploitMemory(orch.state))
         extra = {"max_probes": max_probes} if max_probes else {}
+        if cred:
+            extra["credentials"] = list(cred)
         start = time.time()
         rounds = 0
         try:
@@ -524,6 +620,7 @@ def attack_loop(
                         RunContext(target_host=h, target_port=p,
                                    service=kind_by_host.get(h, "web"), extra=dict(extra)),
                         recon=recon,
+                        login=login,
                     )
                     new_flags += len(report.flags_found)
                 total = len(await inbox.list())

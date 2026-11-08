@@ -98,6 +98,40 @@ def _is_flag_read_cmd(v: str) -> bool:
     return False
 
 
+def _simulate_cmd_output(v: str) -> str | None:
+    """Model a low-priv shell: return realistic output for READ-ONLY enumeration commands.
+
+    Lets the post-exploitation module prove it genuinely parses command output. Returns None
+    when the injected value isn't a recognised enumeration command.
+    """
+    low = v.lower()
+    if any(s in v for s in ("$(id)", "; id", ";id", "| id", "&& id")) or low.rstrip().endswith(" id"):
+        return "uid=33(www-data) gid=33(www-data) groups=33(www-data)"
+    if "whoami" in low:
+        return "www-data"
+    if "uname" in low:
+        return "Linux vuln-box 5.15.0-91-generic #1 SMP x86_64 GNU/Linux"
+    if "sudo" in low and "-l" in low:
+        return ("User www-data may run the following commands:\n"
+                "    (root) NOPASSWD: /usr/bin/python3")
+    if "perm -4000" in low:
+        return "/usr/bin/find\n/usr/bin/python3\n/bin/bash\n/usr/bin/passwd"
+    if "perm -2000" in low:
+        return "/usr/bin/wall\n/usr/bin/write"
+    if "getcap" in low:
+        return "/usr/bin/python3 cap_setuid=ep"
+    if "cron" in low:
+        return "* * * * * root /opt/backup.sh"
+    if "/etc/passwd" in low:
+        return ("root:x:0:0:root:/root:/bin/bash\n"
+                "www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin")
+    if "ps aux" in low or "ps -ef" in low:
+        return "root 1 0.0 0.1 /sbin/init\nwww-data 42 0.0 0.2 /usr/sbin/apache2"
+    if "writable" in low:
+        return "/tmp\n/var/tmp\n/dev/shm"
+    return None
+
+
 _DEFAULT_PATHS = {"/flag", "/flag.txt", "/flags.txt", "/flag.php", "/app/flag.txt"}
 _CRED_PAIRS = {("admin", "admin"), ("admin", "password"), ("root", "root")}
 _IDOR_SECRET = "13"
@@ -139,11 +173,15 @@ def make_handler(flag: str, enabled: frozenset[str]):
                 if "union" in v.lower() and "select" in v.lower() and "flag" in v.lower():
                     return _page(f"query result row: {flag}")
 
-        # 4. OS command injection: flag read off the server filesystem (grep/cat/find/env).
+        # 4. OS command injection: flag read off the server filesystem (grep/cat/find/env),
+        #    or local priv-esc enumeration output (id/sudo/SUID/caps/cron) for post-exploit.
         if "command_injection" in enabled:
             for v in vals:
                 if _is_flag_read_cmd(v):
                     return _page(f"PING 127.0.0.1 (127.0.0.1) 56(84) bytes of data.\n{flag}")
+                sim = _simulate_cmd_output(v)
+                if sim is not None:
+                    return _page(f"PING 127.0.0.1 (127.0.0.1) 56(84) bytes of data.\n{sim}")
 
         # 5. Server-side template injection → RCE reading the server flag.
         if "ssti" in enabled:

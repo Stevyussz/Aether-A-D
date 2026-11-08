@@ -96,6 +96,9 @@ class SweepReport:
     discovered_endpoints: list[str] = field(default_factory=list)
     discovered_params: list[str] = field(default_factory=list)
     fast_path: list[str] = field(default_factory=list)
+    authenticated: bool = False
+    login_as: str | None = None
+    login_endpoint: str | None = None
 
     @property
     def modules_run(self) -> int:
@@ -138,11 +141,28 @@ class AttackSweep:
             return [], []
         return list(res.data.get("endpoints", [])), list(res.data.get("params", []))
 
+    async def _login(self, context: RunContext) -> tuple[dict, str | None, str | None]:
+        """Try to log in; return (cookies, username, endpoint). Empty cookies on failure."""
+        from .recon.web_auth import WebLoginModule
+
+        res = await self.engine.recon(WebLoginModule(), context)
+        if res.ok and res.data.get("authenticated"):
+            return (res.data.get("cookies") or {}, res.data.get("username"),
+                    res.data.get("login_endpoint"))
+        return {}, None, None
+
+    async def privesc(self, context: RunContext) -> ExploitRun:
+        """Run read-only local priv-esc enumeration (operator escalates manually)."""
+        from .exploits.web_postexploit import PostExploitEnumModule
+
+        return await self.engine.run_exploit(PostExploitEnumModule(), context)
+
     async def run(
         self,
         context: RunContext,
         plugins: list[ExploitPlugin] | None = None,
         recon: bool = False,
+        login: bool = False,
     ) -> SweepReport:
         plugins = plugins if plugins is not None else exploits_for(context.service)
         report = SweepReport(target=context.target_host or "unknown")
@@ -169,6 +189,19 @@ class AttackSweep:
             log.info("sweep.recon", extra={"extra_fields": {
                 "target": report.target, "endpoints": len(endpoints), "params": len(params),
             }})
+
+        # Smart login: establish a session so the arsenal attacks BEHIND the login.
+        if login and (context.service or "web").lower() in _WEB_KINDS and not context.extra.get("cookies"):
+            cookies, who, ep = await self._login(context)
+            if cookies:
+                context.extra["cookies"] = cookies
+                report.authenticated = True
+                report.login_as = who
+                report.login_endpoint = ep
+                log.info("sweep.login", extra={"extra_fields": {
+                    "target": report.target, "as": who, "endpoint": ep,
+                    "cookies": len(cookies),
+                }})
 
         # Sequential by design: bounded, predictable load on the target (no accidental DoS).
         for plugin in plugins:
