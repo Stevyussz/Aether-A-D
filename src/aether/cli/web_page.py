@@ -58,6 +58,9 @@ PAGE = r"""<!DOCTYPE html>
   .muted{color:var(--dim);font-size:12px} .mono{font-family:ui-monospace,monospace}
   .log{white-space:pre-wrap;color:var(--dim);font-size:12px;margin-top:8px}
   .tag{color:var(--magenta)} .hide{display:none}
+  .guidelist{margin:4px 0;padding-left:20px} .guidelist li{margin:7px 0;color:var(--fg)}
+  .builder-in{width:100%;background:#05090f;color:var(--fg);border:1px solid var(--line);
+    border-radius:6px;padding:4px 6px;font:12px ui-monospace,monospace}
   .foot{color:var(--dim);font-size:11px;padding:14px 20px;border-top:1px solid var(--line);
     text-align:center}
 </style>
@@ -73,6 +76,7 @@ PAGE = r"""<!DOCTYPE html>
   <button data-tab="attack">Attack</button>
   <button data-tab="flags">Flags</button>
   <button data-tab="config">Config</button>
+  <button data-tab="guide">Game plan</button>
 </nav>
 <main>
   <section id="monitor">
@@ -136,11 +140,41 @@ PAGE = r"""<!DOCTYPE html>
   <section id="config" class="hide">
     <div id="cfgbanner"></div>
     <div class="card">
-      <h3>scope — authorized targets</h3>
-      <div id="scopetable"></div>
+      <h3>scope builder — set this at the briefing</h3>
+      <p class="muted">Add every authorized target the organizer gives you. <b>owner=opponent</b>
+        = you may attack it; <b>owner=self</b> = your own service to defend (put its web-root
+        path in <i>notes</i> so defense can watch it for web shells). Saving is fail-closed:
+        it refuses to disable scope or turn on auto-submit.</p>
+      <div style="height:8px"></div>
+      <div class="row">
+        <label class="muted">flag pattern
+          <input id="fpattern" class="mono" placeholder="IONIC\{[^}]+\}"
+            style="width:220px;background:#05090f;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px"></label>
+        <label class="muted">tick seconds
+          <input id="ftick" type="number" placeholder="120"
+            style="width:90px;background:#05090f;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px"></label>
+        <label class="muted"><input type="checkbox" id="fenforce" checked> enforce scope
+          (keep ON)</label>
+      </div>
+      <div style="height:10px"></div>
+      <table id="builder"><tr><th>name</th><th>host</th><th>ports</th><th>kind</th>
+        <th>owner</th><th>notes (self web-root)</th><th></th></tr></table>
+      <div style="height:8px"></div>
+      <div class="row">
+        <button class="ghost" onclick="addRow()">+ add target</button>
+        <button class="act" onclick="applyScope()">Save scope</button>
+        <span class="muted" id="builderout"></span>
+      </div>
     </div>
     <div style="height:14px"></div>
     <div class="card">
+      <h3>scope — currently authorized</h3>
+      <div id="scopetable"></div>
+    </div>
+    <div style="height:14px"></div>
+    <details>
+      <summary class="muted" style="cursor:pointer;padding:6px 0">Advanced — edit raw YAML</summary>
+    <div class="card" style="margin-top:8px">
       <h3>config (<span id="cfgpath" class="mono muted"></span>)</h3>
       <textarea id="cfgyaml" spellcheck="false"></textarea>
       <div style="height:10px"></div>
@@ -151,6 +185,51 @@ PAGE = r"""<!DOCTYPE html>
           targets, and auto-submit can never be enabled.</span>
       </div>
       <div class="log" id="cfgout"></div>
+    </div>
+    </details>
+  </section>
+
+  <section id="guide" class="hide">
+    <div class="card">
+      <h3>first 5 minutes (do this in order)</h3>
+      <ol class="guidelist">
+        <li><b>Defend first.</b> Everyone starts with the SAME vulnerable service. Whatever you
+          can exploit on others, they can exploit on you — so patch yourself before you attack.</li>
+        <li><b>Snapshot your service</b> and back up the flag store. Note what "normal" looks
+          like (this dashboard's Monitor tab is your baseline).</li>
+        <li><b>Fill the scope</b> (Config tab) with every target the organizer gives you:
+          opponents to attack, your own service as <i>self</i>.</li>
+        <li><b>Run one sweep</b> on an opponent (Attack tab) to confirm the toolchain works and
+          see what the vuln is.</li>
+        <li><b>Find the same bug on your own box and patch it</b> — carefully, keep the service
+          working (the scoreboard checks it).</li>
+      </ol>
+    </div>
+    <div class="grid">
+      <div class="card"><h3>the loop (every tick)</h3>
+        <ol class="guidelist">
+          <li>Attack: re-sweep every opponent (flags rotate each tick) → submit from Flags tab.</li>
+          <li>Defend: watch Monitor for web shells / integrity drift → quarantine, re-patch.</li>
+          <li>Never take your service DOWN — downtime loses SLA points even if unhacked.</li>
+        </ol>
+      </div>
+      <div class="card"><h3>role split (2 people)</h3>
+        <ul class="guidelist">
+          <li><b>You — Attack:</b> run sweeps, read flags, submit on the portal, mark submitted.</li>
+          <li><b>Teammate — Defense:</b> watch Monitor, quarantine shells, patch & keep service up.</li>
+          <li>Swap only if one side is quiet. Talk constantly.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card"><h3>golden rules</h3>
+      <ul class="guidelist">
+        <li>A patched bug you can still exploit on others = double points. Patch, don't just block your own IP.</li>
+        <li>Don't delete the flag file or break the service to "fix" it — you lose SLA points.</li>
+        <li>Keep a copy of every exploit that worked; flags rotate, the bug usually doesn't.</li>
+        <li>AETHER reads flags but <b>never submits</b> — you paste them on the official portal.</li>
+        <li>Full strategy + command cheatsheet: <span class="mono">docs/STRATEGY.md</span> and
+          <span class="mono">docs/CHEATSHEET.md</span> in the repo.</li>
+      </ul>
     </div>
   </section>
 </main>
@@ -170,7 +249,7 @@ let tab="monitor";
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   tab=b.dataset.tab;
   document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x===b));
-  ["monitor","attack","flags","config"].forEach(t=>$("#"+t).classList.toggle("hide",t!==tab));
+  ["monitor","attack","flags","config","guide"].forEach(t=>$("#"+t).classList.toggle("hide",t!==tab));
   if(tab==="flags")loadFlags(); if(tab==="config")loadConfig();
   if(tab==="attack"){loadTargets();pollProgress();}
 });
@@ -258,10 +337,53 @@ async function loadFlags(){
 }
 async function mark(key,status){await postJSON("/api/flags/mark",{key,status});loadFlags();}
 
+const KINDS=["web","redis","memcached","tcp","vault","note","linux"];
+const OWNERS=["opponent","self"];
+function _opt(sel,v){return sel.map(k=>`<option ${k===v?"selected":""}>${k}</option>`).join("");}
+function builderRow(t){
+  t=t||{name:"",host:"",ports:[],kind:"web",owner:"opponent",notes:""};
+  const tr=document.createElement("tr");
+  tr.innerHTML=`<td><input class="builder-in f-name" value="${esc(t.name)}"></td>
+    <td><input class="builder-in f-host" value="${esc(t.host)}"></td>
+    <td><input class="builder-in f-ports" value="${esc((t.ports||[]).join(","))}" placeholder="80,8080"></td>
+    <td><select class="builder-in f-kind">${_opt(KINDS,t.kind||"web")}</select></td>
+    <td><select class="builder-in f-owner">${_opt(OWNERS,t.owner||"opponent")}</select></td>
+    <td><input class="builder-in f-notes" value="${esc(t.notes||"")}" placeholder="/var/www/html"></td>
+    <td><button class="ghost" onclick="this.closest('tr').remove()">✕</button></td>`;
+  return tr;
+}
+function addRow(t){$("#builder").appendChild(builderRow(t));}
+function fillBuilder(c){
+  document.querySelectorAll("#builder tr:not(:first-child)").forEach(r=>r.remove());
+  (c.targets||[]).forEach(t=>addRow(t));
+  if(!(c.targets||[]).length)addRow();
+  $("#fpattern").value=c.pattern||"";
+  $("#ftick").value=c.tick||"";
+  $("#fenforce").checked=c.enforce!==false;
+}
+async function applyScope(){
+  const rows=[...document.querySelectorAll("#builder tr:not(:first-child)")];
+  const targets=rows.map(r=>({
+    name:r.querySelector(".f-name").value.trim(),
+    host:r.querySelector(".f-host").value.trim(),
+    ports:r.querySelector(".f-ports").value.trim(),
+    kind:r.querySelector(".f-kind").value,
+    owner:r.querySelector(".f-owner").value,
+    notes:r.querySelector(".f-notes").value.trim(),
+  })).filter(t=>t.name||t.host);
+  $("#builderout").textContent="saving…";
+  const r=await postJSON("/api/config/apply",{
+    pattern:$("#fpattern").value.trim(),tick:$("#ftick").value.trim(),
+    enforce:$("#fenforce").checked,targets});
+  if(r.error){$("#builderout").innerHTML='<span class="down">✗ '+esc(r.error)+'</span>';return;}
+  $("#builderout").innerHTML=(r.ready?'<span class="up">✓ saved — READY</span>':'<span class="warn">✓ saved — not ready: '+esc((r.issues||[]).join("; "))+'</span>')+' <span class="muted">(restart the web console to re-arm the live engine)</span>';
+  loadConfig();
+}
 async function loadConfig(){
   const c=await getJSON("/api/config");
   $("#cfgpath").textContent=c.path;
   $("#cfgyaml").value=c.yaml;
+  fillBuilder(c);
   let b=c.ready?`<div class="banner ok">✓ READY — scope is armed and fail-closed</div>`
     :`<div class="banner bad">✗ NOT READY (fail closed):<br>`+c.issues.map(esc).join("<br>")+`</div>`;
   if(c.warnings&&c.warnings.length)b+=`<div class="banner" style="border-color:var(--yellow);color:var(--yellow)">⚠ `+c.warnings.map(esc).join("<br>⚠ ")+`</div>`;

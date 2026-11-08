@@ -104,3 +104,37 @@ def test_config_save_is_fail_closed(server):
     assert "error" in r and "scope" in r["error"].lower()
     # The on-disk config is unchanged (still enforcing).
     assert "enforce: true" in cfg_path.read_text()
+
+
+def test_config_apply_form_sets_scope(server):
+    base, _key, cfg_path = server
+    # The dashboard scope-builder form posts structured targets; they get written + armed.
+    r = httpx.post(base + "/api/config/apply", headers={"X-AETHER-Token": TOKEN}, json={
+        "pattern": r"IONIC\{[^}]+\}", "tick": "60", "enforce": True,
+        "targets": [
+            {"name": "enemy1", "host": "10.1.2.3", "ports": "80,8080", "kind": "web",
+             "owner": "opponent", "notes": ""},
+            {"name": "ours", "host": "127.0.0.1", "ports": "80", "kind": "web",
+             "owner": "self", "notes": "/var/www/html"},
+        ]}).json()
+    assert r.get("ok") is True
+    cfg = httpx.get(base + "/api/config").json()
+    hosts = {t["host"] for t in cfg["targets"]}
+    assert "10.1.2.3" in hosts and "127.0.0.1" in hosts
+    assert cfg["tick"] == 60
+    assert "enemy1" in cfg_path.read_text()          # persisted to disk
+
+
+def test_config_apply_is_fail_closed(server):
+    base, _key, cfg_path = server
+    before = cfg_path.read_text()
+    # enforce=false -> refused.
+    r1 = httpx.post(base + "/api/config/apply", headers={"X-AETHER-Token": TOKEN}, json={
+        "pattern": "IONIC", "enforce": False,
+        "targets": [{"name": "x", "host": "1.2.3.4", "ports": "80", "owner": "opponent"}]}).json()
+    assert "error" in r1 and "scope" in r1["error"].lower()
+    # empty targets -> refused.
+    r2 = httpx.post(base + "/api/config/apply", headers={"X-AETHER-Token": TOKEN},
+                    json={"enforce": True, "targets": []}).json()
+    assert "error" in r2
+    assert cfg_path.read_text() == before            # nothing written on refusal

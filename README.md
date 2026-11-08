@@ -37,10 +37,14 @@ with monitoring, one-click scope-enforced sweeps, flag review, and config manage
 
 ## Status
 
-**Release candidate.** All build phases implemented; 194 automated tests passing; 13/14
+**Release candidate.** All build phases implemented; 196 automated tests passing; 13/14
 acceptance criteria verified in the local lab (the last depends on the official briefing and
 is deliberately left pending). See:
 
+- `docs/STRATEGY.md` — **A&D game plan for a team new to Attack & Defense** (roles, first 5
+  minutes, the per-tick loop, scoring model, beginner mistakes, game-day checklist)
+- `docs/CHEATSHEET.md` — quick command reference: AETHER + the manual bits (enumeration,
+  priv-esc, web payloads, service hardening) for authorized competition use
 - `docs/STATUS.md` — per-phase build status
 - `docs/RUNBOOK.md` — operator runbook (both team members)
 - `docs/ACCEPTANCE.md` — acceptance-criteria evidence map (BLUEPRINT §9)

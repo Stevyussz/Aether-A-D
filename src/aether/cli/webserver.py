@@ -315,6 +315,62 @@ class Backend:
         ok = await self.inbox.mark_submitted(key, st)
         return {"ok": bool(ok)}
 
+    def config_apply(self, data: dict) -> dict:
+        """Build config from the dashboard's structured form, then save it (fail-closed).
+
+        Preserves the existing engine/scoring settings and only rewrites the operator-facing
+        bits (scope targets, flag pattern, tick, enforce). Reuses :meth:`config_save` so the
+        same guards apply: auto-submit stays off, scope can't be disabled or emptied.
+        """
+        import yaml
+
+        cfg = self.cfg
+        try:
+            enforce = bool(data.get("enforce", True))
+            pattern = (data.get("pattern") or "").strip() or None
+            tick_raw = data.get("tick")
+            tick = int(tick_raw) if str(tick_raw).strip() not in ("", "None", "0") else None
+            targets_in = data.get("targets") or []
+        except (TypeError, ValueError) as exc:
+            return {"error": f"bad input: {exc}"}
+
+        targets: list[dict] = []
+        for t in targets_in:
+            name = str(t.get("name", "")).strip()
+            host = str(t.get("host", "")).strip()
+            if not name or not host:
+                return {"error": "every target needs both a name and a host"}
+            ports_raw = t.get("ports")
+            try:
+                if isinstance(ports_raw, str):
+                    ports = [int(x) for x in ports_raw.replace(" ", "").split(",") if x]
+                else:
+                    ports = [int(x) for x in (ports_raw or [])]
+            except ValueError:
+                return {"error": f"target '{name}': ports must be numbers"}
+            tgt = {"name": name, "host": host, "ports": ports,
+                   "kind": (str(t.get("kind", "web")).strip() or "web"),
+                   "owner": (str(t.get("owner", "opponent")).strip() or "opponent")}
+            notes = str(t.get("notes", "")).strip()
+            if notes:
+                tgt["notes"] = notes
+            targets.append(tgt)
+
+        doc = {
+            "engine": {"max_concurrency": cfg.engine.max_concurrency,
+                       "default_timeout": cfg.engine.default_timeout,
+                       "state_db": cfg.engine.state_db,
+                       "log_file": cfg.engine.log_file,
+                       "log_level": cfg.engine.log_level},
+            "scope": {"enforce": enforce, "targets": targets},
+            "flags": {"pattern": pattern, "auto_submit": False},
+            "scoring": {"tick_seconds": tick, "epoch": cfg.scoring.epoch,
+                        "expiry_ticks": cfg.scoring.expiry_ticks,
+                        "submit_endpoint": cfg.scoring.submit_endpoint,
+                        "scoreboard_endpoint": cfg.scoring.scoreboard_endpoint}}
+        text = yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
+        return self.config_save(text)
+
     def config_save(self, yaml_text: str) -> dict:
         import tempfile
 
@@ -402,6 +458,8 @@ def _make_handler(backend: Backend, token: str):
                                              payload.get("status", "SUBMITTED")))
                 elif path == "/api/config/save":
                     _json(self, backend.config_save(payload.get("yaml", "")))
+                elif path == "/api/config/apply":
+                    _json(self, backend.config_apply(payload))
                 else:
                     _json(self, {"error": "not found"}, 404)
             except Exception as exc:  # noqa: BLE001

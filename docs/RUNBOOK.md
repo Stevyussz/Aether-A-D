@@ -3,6 +3,10 @@
 For a two-person team. Everything here works today against the local lab; the only thing
 you add at the competition is the official scope/flag/timing in `config/aether.yaml`.
 
+> **New to Attack & Defense?** Read **[STRATEGY.md](STRATEGY.md)** first (roles, first 5
+> minutes, the per-tick loop, scoring, game-day checklist) and keep
+> **[CHEATSHEET.md](CHEATSHEET.md)** open (AETHER + manual commands).
+
 ## 0. One-time setup (per machine)
 
 ```bash
@@ -29,7 +33,9 @@ It serves four tabs — **Monitor** (live health/integrity/incidents/flags/patch
 resources + **detected web shells** with a one-click quarantine, auto-refreshing), **Attack**
 (one-click scope-enforced sweep per authorized target with a **live progress panel** — bar,
 current module, confirmed modules, flag count, and a streaming log), **Flags** (review, reveal,
-and mark submitted/accepted), and **Config** (view scope + readiness, edit and save the YAML).
+and mark submitted/accepted), **Config** (a point-and-click **scope builder** — add/remove
+targets, set flag pattern + tick, Save; plus the raw YAML editor under "Advanced"), and
+**Game plan** (the first-5-minutes / per-tick guide in-app).
 It binds to localhost only, mutating actions require the token in the URL, scope stays
 fail-closed, config save refuses to disable scope, quarantine only touches files inside our own
 watched roots and backs up first, and AETHER never auto-submits — exactly like the CLI.
