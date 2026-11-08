@@ -117,6 +117,8 @@ PAGE = r"""<!DOCTYPE html>
         submit di portal.</p>
       <label class="muted"><input type="checkbox" id="usetools" checked>
         pakai external tools (nmap/rustscan/gobuster/ffuf/whatweb) — lebih lengkap, agak lebih lama</label>
+      <label class="muted" style="margin-left:14px"><input type="checkbox" id="usenuclei">
+        + nuclei (CVE checks — lebih lambat, hasil jadi lead)</label>
       <div style="height:10px"></div>
       <div id="targets"></div>
     </div>
@@ -133,6 +135,7 @@ PAGE = r"""<!DOCTYPE html>
       </div>
       <div style="height:8px"></div>
       <div id="progconfirmed"></div>
+      <div id="progintel"></div>
       <div class="log" id="attackout" style="max-height:220px;overflow:auto"></div>
     </div>
   </section>
@@ -408,10 +411,21 @@ async function loadTargets(){
 let progTimer=null;
 async function sweep(host,port){
   const tools=$("#usetools")?$("#usetools").checked:true;
-  const r=await postJSON("/api/attack/sweep",{host,port,tools});
+  const nuclei=$("#usenuclei")?$("#usenuclei").checked:false;
+  const r=await postJSON("/api/attack/sweep",{host,port,tools,nuclei});
   if(r.error){$("#attackout").textContent="✗ "+r.error;return;}
   $("#attackout").textContent=`▶ round ${r.round}: sweeping ${host}:${port} …`;
   startProgress();
+}
+function renderIntel(p){
+  let h="";
+  if((p.open_ports||[]).length) h+='<div class="card" style="margin:8px 0"><h3>open ports &amp; services</h3><table><tr><th>port</th><th>service</th><th>product</th></tr>'+
+    p.open_ports.map(s=>`<tr><td class="mono">${s.port}</td><td>${esc(s.service||"?")}</td><td class="mut">${esc(s.product||"")}</td></tr>`).join("")+'</table></div>';
+  if((p.fingerprints||[]).length) h+='<div class="muted" style="margin:6px 0"><b>tech:</b> '+p.fingerprints.map(esc).join(", ")+'</div>';
+  if((p.paths||[]).length) h+='<div class="muted" style="margin:6px 0"><b>paths ditemukan:</b> '+p.paths.slice(0,30).map(x=>esc(x.path)+" ("+x.status+")").join(", ")+'</div>';
+  if((p.nuclei||[]).length) h+='<div class="card" style="margin:8px 0"><h3>nuclei findings (lead — belum di-exploit)</h3><table><tr><th>severity</th><th>template</th><th>matched</th></tr>'+
+    p.nuclei.map(n=>`<tr><td class="sev-${(n.severity||"").toUpperCase()==="CRITICAL"?"CRITICAL":((n.severity||"").toUpperCase()==="HIGH"?"CRITICAL":"WARNING")}">${esc(n.severity||"?")}</td><td>${esc(n.template||"")}</td><td class="mut">${esc(n.matched||"")}</td></tr>`).join("")+'</table></div>';
+  $("#progintel").innerHTML=h;
 }
 function startProgress(){if(progTimer)clearInterval(progTimer);pollProgress();progTimer=setInterval(pollProgress,1200);}
 async function pollProgress(){
@@ -428,6 +442,7 @@ async function pollProgress(){
     (p.authenticated?` · <span class="up">logged in${p.login_as?(" as "+esc(p.login_as)):""}</span>`:"");
   $("#progconfirmed").innerHTML=(p.confirmed||[]).length
     ?'<div class="row">'+p.confirmed.map(m=>`<span class="pill" style="background:#07140f;color:var(--green);border:1px solid var(--green)">${esc(m)}</span>`).join(" ")+'</div>':"";
+  renderIntel(p);
   $("#attackout").textContent=(p.log||[]).join("\n");
   $("#attackout").scrollTop=$("#attackout").scrollHeight;
   if(p.status!=="running"){if(progTimer){clearInterval(progTimer);progTimer=null;}}

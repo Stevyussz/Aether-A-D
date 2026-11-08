@@ -41,6 +41,7 @@ class ToolReconModule(Module):
         want_ports = context.extra.get("tool_ports", True)
         want_content = context.extra.get("tool_content", True)
         want_fp = context.extra.get("tool_fingerprint", True)
+        want_nuclei = context.extra.get("tool_nuclei", False)   # slower; opt-in
 
         tools = toolscan.detect_tools()
         data: dict = {"tools_available": tools}
@@ -80,6 +81,19 @@ class ToolReconModule(Module):
                 data["fingerprints"] = fp["tech"]
                 context.extra["fingerprints"] = fp["tech"]
                 summary_bits.append(f"{len(fp['tech'])} tech token(s) via whatweb")
+
+        # 4) nuclei templated CVE checks (opt-in) — detection leads for the operator; AETHER
+        #    does not auto-exploit these, it surfaces them (works across all service types).
+        if want_nuclei and (context.service or "web").lower() in ("web", "http", "https", ""):
+            nf = await toolscan.nuclei_scan(base, timeout=float(context.extra.get("nuclei_timeout", 180)))
+            findings = nf.get("findings", [])
+            if findings:
+                data["nuclei"] = findings
+                context.extra["nuclei_findings"] = findings
+                sev = {}
+                for f in findings:
+                    sev[f.get("severity", "unknown")] = sev.get(f.get("severity", "unknown"), 0) + 1
+                summary_bits.append(f"{len(findings)} nuclei finding(s) ({sev})")
 
         installed = [t for t, ok in tools.items() if ok]
         detail = ("; ".join(summary_bits) if summary_bits

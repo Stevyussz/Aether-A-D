@@ -116,6 +116,8 @@ class SweepReport:
     login_endpoint: str | None = None
     open_ports: list[dict] = field(default_factory=list)
     fingerprints: list[str] = field(default_factory=list)
+    discovered_paths_tool: list[dict] = field(default_factory=list)
+    nuclei: list[dict] = field(default_factory=list)
 
     @property
     def modules_run(self) -> int:
@@ -200,10 +202,13 @@ class AttackSweep:
             tdata = await self._toolscan(context)
             report.open_ports = list(tdata.get("open_ports", []))
             report.fingerprints = list(tdata.get("fingerprints", []))
+            report.discovered_paths_tool = list(tdata.get("discovered_paths", []))
+            report.nuclei = list(tdata.get("nuclei", []))
             _emit(progress, {"phase": "tools_done",
                              "ports": len(report.open_ports),
-                             "paths": len(tdata.get("discovered_paths", [])),
-                             "tech": len(report.fingerprints)})
+                             "paths": len(report.discovered_paths_tool),
+                             "tech": len(report.fingerprints),
+                             "nuclei": len(report.nuclei)})
 
         # Exploit farm: run modules that previously confirmed on this target FIRST.
         if self.memory is not None:

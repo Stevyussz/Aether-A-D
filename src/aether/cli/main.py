@@ -481,6 +481,9 @@ def attack_sweep(
                                help="Also drive installed external scanners first "
                                     "(nmap/rustscan ports, gobuster/ffuf paths, whatweb tech) "
                                     "to widen the attack surface."),
+    nuclei: bool = typer.Option(False, "--nuclei/--no-nuclei",
+                                help="Also run nuclei templated CVE checks (implies --tools; "
+                                     "slower). Findings are surfaced as leads, not auto-exploited."),
     cred: list[str] = typer.Option(None, "--cred",
                                    help="Credential to try as user:pass (repeatable)."),
 ) -> None:
@@ -545,6 +548,9 @@ def attack_sweep(
                 extra["max_probes"] = max_probes
             if cred:
                 extra["credentials"] = list(cred)
+            if nuclei:
+                extra["tool_nuclei"] = True
+            use_tools = tools or nuclei
             kind_by_host = {t.host: t.kind for t in cfg.scope.targets}
             for h, p in authorized:
                 console.print(f"[cyan]▶ sweeping {h}:{p} …[/]")
@@ -553,13 +559,16 @@ def attack_sweep(
                                service=kind_by_host.get(h, "web"), extra=dict(extra)),
                     recon=recon,
                     login=login,
-                    tools=tools,
+                    tools=use_tools,
                 )
                 if report.open_ports:
                     console.print(f"  [cyan]ports:[/] " + ", ".join(
                         f"{s['port']}/{s.get('service','?')}" for s in report.open_ports[:12]))
                 if report.fingerprints:
                     console.print(f"  [cyan]tech:[/] " + ", ".join(report.fingerprints[:8]))
+                for nf in report.nuclei[:12]:
+                    console.print(f"  [magenta]nuclei[/] [{nf.get('severity','?')}] "
+                                  f"{nf.get('template','')} @ {nf.get('matched','')}")
                 if report.authenticated:
                     console.print(f"  [green]✓ logged in as {report.login_as} "
                                   f"at {report.login_endpoint} — attacking authenticated[/]")
@@ -587,6 +596,7 @@ def attack_recon(
     host: str = typer.Argument(..., help="Authorized host to scan."),
     port: int = typer.Option(None, "--port", "-p", help="Target port (default: from scope/80)."),
     config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    nuclei: bool = typer.Option(False, "--nuclei", help="Also run nuclei CVE checks (slower)."),
 ) -> None:
     """Drive installed external scanners (nmap/rustscan, gobuster/ffuf, whatweb) at a target.
 
@@ -626,7 +636,8 @@ def attack_recon(
             kind = next((t.kind for t in cfg.scope.targets if t.host == host), "web")
             console.print(f"[cyan]▶ recon {host}:{p} …[/] [dim](this may take a bit)[/]")
             res = await engine.recon(ToolReconModule(),
-                                     RunContext(target_host=host, target_port=p, service=kind))
+                                     RunContext(target_host=host, target_port=p, service=kind,
+                                                extra={"tool_nuclei": nuclei}))
             data = res.data
             ports = data.get("open_ports", [])
             if ports:
@@ -644,6 +655,12 @@ def attack_recon(
                 console.print(t)
             if data.get("fingerprints"):
                 console.print("[cyan]tech:[/] " + ", ".join(data["fingerprints"]))
+            if data.get("nuclei"):
+                t = Table(title="nuclei findings (leads — not auto-exploited)")
+                t.add_column("severity"); t.add_column("template"); t.add_column("matched")
+                for nf in data["nuclei"]:
+                    t.add_row(nf.get("severity", "?"), nf.get("template", ""), nf.get("matched", ""))
+                console.print(t)
             console.print(f"[green]{res.detail}[/]")
         finally:
             await orch.shutdown()
