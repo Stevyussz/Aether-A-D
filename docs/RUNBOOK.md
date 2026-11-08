@@ -70,6 +70,12 @@ intentional. Do not set `scope.enforce: false` during the competition.
 
 # EXTERNAL RECON only (no exploitation) — ports/services, paths, tech:
 .venv/bin/aether attack recon <host>            # nmap/rustscan + gobuster/ffuf + whatweb, scope-enforced
+.venv/bin/aether attack recon <host> --nuclei   # ALSO run nuclei CVE checks (leads; slower)
+.venv/bin/aether attack sweep <host> --nuclei   # tools + nuclei + full arsenal in one go
+#   nuclei findings are DETECTION LEADS (surfaced, not auto-exploited). First nuclei run
+#   downloads its templates (can take minutes) — run `nuclei -update-templates` once up front.
+#   In the Web Console, tick "+ nuclei" on the Attack tab; ports/tech/paths/nuclei all render
+#   in the live sweep panel.
 
 # BEHIND A LOGIN — sweep auto-logs-in first (default/weak creds), then attacks authenticated:
 .venv/bin/aether attack sweep <host>                      # --login is ON by default
