@@ -218,6 +218,13 @@ class AttackSweep:
         if recon and (context.service or "web").lower() in _WEB_KINDS:
             _emit(progress, {"phase": "recon"})
             endpoints, params = await self._recon(context)
+            # MERGE with anything already discovered (e.g. gobuster/ffuf paths from the tools
+            # phase) — never overwrite, or we'd drop endpoints like /lfi.php that the crawler
+            # can't reach from links.
+            prior_eps = context.extra.get("discovered_endpoints") or []
+            prior_params = context.extra.get("discovered_params") or []
+            endpoints = list(dict.fromkeys([*prior_eps, *endpoints]))
+            params = list(dict.fromkeys([*prior_params, *params]))
             report.discovered_endpoints = endpoints
             report.discovered_params = params
             if endpoints:
