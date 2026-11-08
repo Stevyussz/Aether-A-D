@@ -29,13 +29,15 @@ aether web                 # prints a tokenised http://127.0.0.1:8787/?token=…
 aether web --port 9000     # choose the port (localhost only, never exposed)
 ```
 
-It serves four tabs — **Monitor** (live health/integrity/incidents/flags/patch-log/tick/
-resources + **detected web shells** with a one-click quarantine, auto-refreshing), **Attack**
-(one-click scope-enforced sweep per authorized target with a **live progress panel** — bar,
-current module, confirmed modules, flag count, and a streaming log), **Flags** (review, reveal,
-and mark submitted/accepted), **Config** (a point-and-click **scope builder** — add/remove
-targets, set flag pattern + tick, Save; plus the raw YAML editor under "Advanced"), and
-**Game plan** (the first-5-minutes / per-tick guide in-app).
+It serves six tabs — **Monitor** (live **charts** for CPU/memory, service latency, and
+VALIDATED flags, plus health/integrity/incidents/web-shells/patch-log/tick, auto-refreshing),
+**Attack** (one-click scope-enforced sweep per target with an "external tools" toggle and a
+**live progress panel** — bar, current module, confirmed modules, flag count, streaming log),
+**Defense** (the control centre for keeping your own service safe: web-shell list with one-click
+**Quarantine**, incidents, file-integrity, service/SLA status, patch log, and a "Jalankan
+defense sweep" button), **Flags** (review, reveal, mark submitted/accepted), **Config** (a
+point-and-click **scope builder** plus raw-YAML editor under "Advanced"), and **Panduan** (the
+first-5-minutes / per-tick guide in-app). UI prose is in Indonesian; cyber terms stay English.
 It binds to localhost only, mutating actions require the token in the URL, scope stays
 fail-closed, config save refuses to disable scope, quarantine only touches files inside our own
 watched roots and backs up first, and AETHER never auto-submits — exactly like the CLI.
@@ -61,6 +63,13 @@ intentional. Do not set `scope.enforce: false` during the competition.
 .venv/bin/aether attack sweep <opponent-host>  # smart by default: crawls first, then aims
 .venv/bin/aether attack sweep                   # omit host = sweep ALL in-scope opponents
 .venv/bin/aether attack sweep <host> --no-recon # skip the crawl (blind wordlists only)
+.venv/bin/aether attack sweep <host> --tools    # ALSO drive nmap/rustscan/gobuster/ffuf/whatweb
+#   --tools widens the surface: discovers extra open ports/services (so you notice a second web
+#   or data-store port), extra endpoints (gobuster/ffuf), and the tech stack (whatweb), then
+#   feeds all of it into the exploit arsenal. Needs those tools on PATH; degrades gracefully.
+
+# EXTERNAL RECON only (no exploitation) — ports/services, paths, tech:
+.venv/bin/aether attack recon <host>            # nmap/rustscan + gobuster/ffuf + whatweb, scope-enforced
 
 # BEHIND A LOGIN — sweep auto-logs-in first (default/weak creds), then attacks authenticated:
 .venv/bin/aether attack sweep <host>                      # --login is ON by default

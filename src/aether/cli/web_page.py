@@ -31,6 +31,10 @@ PAGE = r"""<!DOCTYPE html>
   nav button.active{color:var(--cyan);border-color:var(--cyan);background:var(--panel2)}
   main{padding:18px 20px;max-width:1200px;margin:0 auto}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:820px){.grid,.grid3{grid-template-columns:1fr}}
+  .chart{width:100%;height:120px;display:block}
+  .chart text{fill:var(--dim);font-size:10px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
   .card h3{margin:0 0 10px;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--dim)}
   table{width:100%;border-collapse:collapse}
@@ -74,38 +78,47 @@ PAGE = r"""<!DOCTYPE html>
 <nav>
   <button data-tab="monitor" class="active">Monitor</button>
   <button data-tab="attack">Attack</button>
+  <button data-tab="defense">Defense</button>
   <button data-tab="flags">Flags</button>
   <button data-tab="config">Config</button>
-  <button data-tab="guide">Game plan</button>
+  <button data-tab="guide">Panduan</button>
 </nav>
 <main>
   <section id="monitor">
     <div class="kpi" id="kpi"></div>
     <div style="height:12px"></div>
+    <div class="grid3">
+      <div class="card"><h3>CPU &amp; memory (live)</h3><div id="chart-res"></div></div>
+      <div class="card"><h3>service latency (ms)</h3><div id="chart-lat"></div></div>
+      <div class="card"><h3>flags</h3><div id="chart-flags"></div></div>
+    </div>
+    <div style="height:14px"></div>
     <div class="grid">
       <div class="card"><h3>services</h3><div id="services"></div></div>
       <div class="card"><h3>file integrity</h3><div id="integrity"></div></div>
     </div>
     <div style="height:14px"></div>
-    <div class="card"><h3>incidents (latest sweep)</h3><div id="incidents"></div></div>
+    <div class="card"><h3>incidents (sweep terakhir)</h3><div id="incidents"></div></div>
     <div style="height:14px"></div>
-    <div class="card"><h3>web shells detected (our services)</h3><div id="webshells"></div>
+    <div class="card"><h3>web shell terdeteksi (service kita)</h3><div id="webshells"></div>
       <div class="log" id="wsout"></div></div>
     <div style="height:14px"></div>
     <div class="grid">
       <div class="card"><h3>flag inbox</h3><div id="flagsum"></div></div>
-      <div class="card"><h3>modification / patch log</h3><div id="mods"></div></div>
+      <div class="card"><h3>log modifikasi / patch</h3><div id="mods"></div></div>
     </div>
   </section>
 
   <section id="attack" class="hide">
     <div class="card">
       <h3>attack control</h3>
-      <p class="muted">Sweep runs the full validated arsenal (auto-recon + auto-login +
-        read server flags). Scope-enforced. Flags land PENDING — you submit on the portal.</p>
-      <div id="targets"></div>
+      <p class="muted">Sweep menjalankan seluruh arsenal (external tools + recon + auto-login +
+        baca flag di server). Scope-enforced. Flag masuk inbox sebagai PENDING — kamu yang
+        submit di portal.</p>
+      <label class="muted"><input type="checkbox" id="usetools" checked>
+        pakai external tools (nmap/rustscan/gobuster/ffuf/whatweb) — lebih lengkap, agak lebih lama</label>
       <div style="height:10px"></div>
-      <button class="ghost" onclick="defenseSweep()">Run one defense sweep</button>
+      <div id="targets"></div>
     </div>
     <div style="height:14px"></div>
     <div class="card" id="progcard">
@@ -124,13 +137,42 @@ PAGE = r"""<!DOCTYPE html>
     </div>
   </section>
 
+  <section id="defense" class="hide">
+    <div class="card">
+      <h3>defense control — jaga service kita, jangan sampai kebobolan</h3>
+      <p class="muted">Deteksi web shell & perubahan file di service sendiri, lalu bersihkan
+        dengan aman (backup dulu, reversible). Service tetap harus UP (dicek juri/SLA).</p>
+      <div class="row">
+        <button class="act" onclick="defSweep()">Jalankan defense sweep</button>
+        <button class="ghost" onclick="tick()">Scan ulang web shell</button>
+        <span class="muted" id="defout"></span>
+      </div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="kpi" id="defkpi"></div>
+    <div style="height:12px"></div>
+    <div class="card"><h3>web shell terdeteksi — klik Quarantine untuk membersihkan</h3>
+      <div id="def-webshells"></div><div class="log" id="def-wsout"></div></div>
+    <div style="height:14px"></div>
+    <div class="grid">
+      <div class="card"><h3>incidents</h3><div id="def-incidents"></div></div>
+      <div class="card"><h3>file integrity — service kita</h3><div id="def-integrity"></div></div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="card"><h3>services — status &amp; functional check (SLA)</h3>
+      <div id="def-services"></div></div>
+    <div style="height:14px"></div>
+    <div class="card"><h3>log modifikasi / patch (semua reversible)</h3>
+      <div id="def-mods"></div></div>
+  </section>
+
   <section id="flags" class="hide">
     <div class="card">
       <h3>flag inbox</h3>
       <div class="row">
         <label class="muted"><input type="checkbox" id="reveal" onchange="loadFlags()">
-          reveal values</label>
-        <span class="muted">AETHER never submits — "mark" only records what YOU did.</span>
+          tampilkan nilai flag</label>
+        <span class="muted">AETHER tidak pernah submit — tombol "mark" hanya mencatat tindakanmu.</span>
       </div>
       <div style="height:8px"></div>
       <div id="flagtable"></div>
@@ -249,9 +291,10 @@ let tab="monitor";
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   tab=b.dataset.tab;
   document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x===b));
-  ["monitor","attack","flags","config","guide"].forEach(t=>$("#"+t).classList.toggle("hide",t!==tab));
+  ["monitor","attack","defense","flags","config","guide"].forEach(t=>$("#"+t).classList.toggle("hide",t!==tab));
   if(tab==="flags")loadFlags(); if(tab==="config")loadConfig();
   if(tab==="attack"){loadTargets();pollProgress();}
+  if(tab==="defense")tick();
 });
 
 function kpi(n,l,c){return `<div><div class="n" style="color:${c||'var(--cyan)'}">${n}</div><div class="l">${l}</div></div>`;}
@@ -265,14 +308,14 @@ async function tick(){
     kpi(fs.PENDING||0,"pending submit","var(--yellow)")+kpi(s.incidents.length,"incidents",s.incidents.length?"var(--red)":"var(--green)")+
     kpi(s.services.filter(x=>x.up).length+"/"+s.services.length,"services up");
   $("#services").innerHTML=s.services.length?`<table><tr><th>service</th><th>health</th><th>latency</th><th>functional</th></tr>`+
-    s.services.map(h=>`<tr><td>${esc(h.service)}</td><td class="${h.up?'up':'down'}">${h.up?'● UP':'● DOWN'}</td><td class="mut">${h.latency_ms} ms</td><td>${h.functional==null?'<span class="mut">n/a</span>':(h.functional?'<span class="up">pass</span>':'<span class="down">FAIL</span>')}</td></tr>`).join("")+`</table>`:'<span class="mut">no probes</span>';
+    s.services.map(h=>`<tr><td>${esc(h.service)}</td><td class="${h.up?'up':'down'}">${h.up?'● UP':'● DOWN'}</td><td class="mut">${h.latency_ms} ms</td><td>${h.functional==null?'<span class="mut">n/a</span>':(h.functional?'<span class="up">pass</span>':'<span class="down">FAIL</span>')}</td></tr>`).join("")+`</table>`:'<span class="mut">belum ada service probe</span>';
   $("#integrity").innerHTML=s.integrity.length?`<table><tr><th>path</th><th>baseline</th><th>status</th></tr>`+
-    s.integrity.map(i=>`<tr><td>${esc(i.path)}</td><td class="mut">${i.baseline} files</td><td>${i.clean?'<span class="up">clean</span>':`<span class="down">+${i.added} ~${i.modified} -${i.removed}</span>`}</td></tr>`).join("")+`</table>`:'<span class="mut">no paths watched</span>';
+    s.integrity.map(i=>`<tr><td>${esc(i.path)}</td><td class="mut">${i.baseline} files</td><td>${i.clean?'<span class="up">clean</span>':`<span class="down">+${i.added} ~${i.modified} -${i.removed}</span>`}</td></tr>`).join("")+`</table>`:'<span class="mut">belum ada path dipantau</span>';
   $("#incidents").innerHTML=s.incidents.length?`<table><tr><th>severity</th><th>kind</th><th>summary</th></tr>`+
-    s.incidents.map(i=>`<tr><td class="sev-${i.severity}">${i.severity}</td><td>${esc(i.kind)}</td><td>${esc(i.summary)}</td></tr>`).join("")+`</table>`:'<span class="up">no incidents this sweep</span>';
+    s.incidents.map(i=>`<tr><td class="sev-${i.severity}">${i.severity}</td><td>${esc(i.kind)}</td><td>${esc(i.summary)}</td></tr>`).join("")+`</table>`:'<span class="up">tidak ada incident di sweep ini</span>';
   window._shells=s.webshells||[];
   $("#webshells").innerHTML=window._shells.length?`<table><tr><th>path</th><th>signatures</th><th>action</th></tr>`+
-    window._shells.map((w,i)=>`<tr><td class="mono down">${esc(w.path)}</td><td class="mut">${esc((w.signatures||[]).join(", "))}</td><td><button class="act" onclick="quarantineIdx(${i})">Quarantine</button></td></tr>`).join("")+`</table>`:'<span class="up">none detected in watched roots</span>';
+    window._shells.map((w,i)=>`<tr><td class="mono down">${esc(w.path)}</td><td class="mut">${esc((w.signatures||[]).join(", "))}</td><td><button class="act" onclick="quarantineIdx(${i})">Quarantine</button></td></tr>`).join("")+`</table>`:'<span class="up">bersih — tidak ada web shell di watched roots</span>';
   $("#flagsum").innerHTML=`<table>
     <tr><td class="mut">total</td><td><b>${s.flags.total}</b></td></tr>
     <tr><td class="mut">VALIDATED</td><td class="up">${fv.VALIDATED||0}</td></tr>
@@ -280,7 +323,79 @@ async function tick(){
     <tr><td class="mut">PENDING submit</td><td class="warn">${fs.PENDING||0}</td></tr>
     <tr><td class="mut">SUBMITTED / ACCEPTED</td><td>${fs.SUBMITTED||0} / ${fs.ACCEPTED||0}</td></tr></table>`;
   $("#mods").innerHTML=s.mods.length?`<table><tr><th>time</th><th>component</th><th>action</th><th>target</th></tr>`+
-    s.mods.map(m=>`<tr><td class="mut">${esc(m.ts)}</td><td>${esc(m.component)}</td><td>${esc(m.action)}</td><td class="mut">${esc(m.target)}</td></tr>`).join("")+`</table>`:'<span class="mut">no changes logged</span>';
+    s.mods.map(m=>`<tr><td class="mut">${esc(m.ts)}</td><td>${esc(m.component)}</td><td>${esc(m.action)}</td><td class="mut">${esc(m.target)}</td></tr>`).join("")+`</table>`:'<span class="mut">belum ada perubahan tercatat</span>';
+  window._laststate=s; pushHistory(s); drawCharts();
+  if(tab==="defense")renderDefense(s);
+}
+
+// ---- charts (inline SVG, offline) --------------------------------------------------------
+const HIST={cpu:[],mem:[],lat:{},flags:[]};
+function pushHistory(s){
+  const cap=40;
+  HIST.cpu.push(s.resources.cpu); if(HIST.cpu.length>cap)HIST.cpu.shift();
+  HIST.mem.push(s.resources.mem_percent); if(HIST.mem.length>cap)HIST.mem.shift();
+  (s.services||[]).forEach(h=>{const k=h.service;(HIST.lat[k]=HIST.lat[k]||[]).push(h.up?h.latency_ms:0); if(HIST.lat[k].length>cap)HIST.lat[k].shift();});
+  const fv=s.flags.by_validation||{}; HIST.flags.push(fv.VALIDATED||0); if(HIST.flags.length>cap)HIST.flags.shift();
+}
+function linePath(arr,w,h,max){
+  if(!arr.length)return "";
+  const mx=max||Math.max(1,...arr); const step=arr.length>1?w/(arr.length-1):w;
+  return arr.map((v,i)=>`${i===0?'M':'L'}${(i*step).toFixed(1)},${(h-(v/mx)*h).toFixed(1)}`).join(" ");
+}
+function sparkSVG(series,max,unit){
+  const w=300,h=100; let paths="",leg="",ci=0;
+  const cols=["var(--cyan)","var(--green)","var(--magenta)","var(--yellow)","var(--red)"];
+  for(const name in series){const c=cols[ci%cols.length];ci++;
+    paths+=`<path d="${linePath(series[name],w,h,max)}" fill="none" stroke="${c}" stroke-width="1.5"/>`;
+    const last=series[name].length?series[name][series[name].length-1]:0;
+    leg+=`<tspan fill="${c}">■</tspan> ${esc(name)} ${last}${unit||""}  `;}
+  return `<svg class="chart" viewBox="0 0 ${w} ${h+16}" preserveAspectRatio="none">${paths}<text x="0" y="${h+12}">${leg}</text></svg>`;
+}
+function barSVG(arr,col){
+  const w=300,h=100,mx=Math.max(1,...arr),bw=arr.length?w/arr.length:w;
+  const bars=arr.map((v,i)=>`<rect x="${(i*bw).toFixed(1)}" y="${(h-(v/mx)*h).toFixed(1)}" width="${(bw*0.8).toFixed(1)}" height="${((v/mx)*h).toFixed(1)}" fill="${col}"/>`).join("");
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${bars}</svg>`;
+}
+function drawCharts(){
+  $("#chart-res").innerHTML=sparkSVG({cpu:HIST.cpu,mem:HIST.mem},100,"%");
+  const latc=$("#chart-lat"); if(latc)latc.innerHTML=Object.keys(HIST.lat).length?sparkSVG(HIST.lat,null,"ms"):'<span class="mut">no services</span>';
+  const fc=$("#chart-flags"); if(fc)fc.innerHTML=HIST.flags.some(x=>x)?barSVG(HIST.flags,"var(--green)"):'<span class="mut">belum ada flag VALIDATED</span>';
+}
+
+// ---- defense tab -------------------------------------------------------------------------
+function renderDefense(s){
+  const shells=s.webshells||[]; window._shells=shells;
+  const down=(s.services||[]).filter(x=>!x.up).length;
+  const crit=(s.incidents||[]).filter(i=>i.severity==="CRITICAL").length;
+  $("#defkpi").innerHTML=kpi(shells.length,"web shell",shells.length?"var(--red)":"var(--green)")+
+    kpi(crit,"incident CRITICAL",crit?"var(--red)":"var(--green)")+
+    kpi((s.services.filter(x=>x.up).length)+"/"+s.services.length,"service UP",down?"var(--red)":"var(--green)")+
+    kpi((s.integrity||[]).filter(i=>!i.clean).length,"file integrity drift","var(--yellow)");
+  $("#def-webshells").innerHTML=shells.length?`<table><tr><th>path</th><th>signatures</th><th>action</th></tr>`+
+    shells.map((w,i)=>`<tr><td class="mono down">${esc(w.path)}</td><td class="mut">${esc((w.signatures||[]).join(", "))}</td><td><button class="act" onclick="quarantineDef(${i})">Quarantine</button></td></tr>`).join("")+`</table>`:'<span class="up">bersih — tidak ada web shell di watched roots</span>';
+  $("#def-incidents").innerHTML=(s.incidents||[]).length?`<table><tr><th>severity</th><th>kind</th><th>summary</th></tr>`+
+    s.incidents.map(i=>`<tr><td class="sev-${i.severity}">${i.severity}</td><td>${esc(i.kind)}</td><td>${esc(i.summary)}</td></tr>`).join("")+`</table>`:'<span class="up">tidak ada incident</span>';
+  $("#def-integrity").innerHTML=(s.integrity||[]).length?`<table><tr><th>path</th><th>baseline</th><th>status</th></tr>`+
+    s.integrity.map(i=>`<tr><td>${esc(i.path)}</td><td class="mut">${i.baseline} files</td><td>${i.clean?'<span class="up">clean</span>':`<span class="down">+${i.added} ~${i.modified} -${i.removed}</span>`}</td></tr>`).join("")+`</table>`:'<span class="mut">belum ada path yang dipantau (set owner=self + notes di Config)</span>';
+  $("#def-services").innerHTML=(s.services||[]).length?`<table><tr><th>service</th><th>health</th><th>latency</th><th>functional (SLA)</th></tr>`+
+    s.services.map(h=>`<tr><td>${esc(h.service)}</td><td class="${h.up?'up':'down'}">${h.up?'● UP':'● DOWN'}</td><td class="mut">${h.latency_ms} ms</td><td>${h.functional==null?'<span class="mut">n/a</span>':(h.functional?'<span class="up">pass</span>':'<span class="down">FAIL</span>')}</td></tr>`).join("")+`</table>`:'<span class="mut">no service probes</span>';
+  $("#def-mods").innerHTML=(s.mods||[]).length?`<table><tr><th>time</th><th>component</th><th>action</th><th>target</th></tr>`+
+    s.mods.map(m=>`<tr><td class="mut">${esc(m.ts)}</td><td>${esc(m.component)}</td><td>${esc(m.action)}</td><td class="mut">${esc(m.target)}</td></tr>`).join("")+`</table>`:'<span class="mut">belum ada perubahan tercatat</span>';
+}
+async function defSweep(){
+  $("#defout").textContent="menjalankan defense sweep…";
+  const r=await postJSON("/api/defense/sweep",{});
+  $("#defout").textContent=`defense sweep selesai: ${r.incidents} incident(s)`;
+  tick();
+}
+async function quarantineDef(i){
+  const w=(window._shells||[])[i]; if(!w)return;
+  if(!confirm("Quarantine (backup + pindahkan keluar web root) "+w.path+" ?"))return;
+  $("#def-wsout").textContent="quarantine "+w.path+" … (backup → move → functional test → verify)";
+  const r=await postJSON("/api/defense/quarantine",{path:w.abs_path});
+  if(r.error){$("#def-wsout").textContent="✗ "+r.error;return;}
+  $("#def-wsout").textContent=`${r.outcome}${r.safe?" ✓ safe":""}: ${r.detail}\n`+(r.steps||[]).join("\n");
+  tick();
 }
 
 async function loadTargets(){
@@ -292,7 +407,8 @@ async function loadTargets(){
 }
 let progTimer=null;
 async function sweep(host,port){
-  const r=await postJSON("/api/attack/sweep",{host,port});
+  const tools=$("#usetools")?$("#usetools").checked:true;
+  const r=await postJSON("/api/attack/sweep",{host,port,tools});
   if(r.error){$("#attackout").textContent="✗ "+r.error;return;}
   $("#attackout").textContent=`▶ round ${r.round}: sweeping ${host}:${port} …`;
   startProgress();
@@ -300,7 +416,7 @@ async function sweep(host,port){
 function startProgress(){if(progTimer)clearInterval(progTimer);pollProgress();progTimer=setInterval(pollProgress,1200);}
 async function pollProgress(){
   let p; try{p=await getJSON("/api/attack/progress");}catch(e){return;}
-  if(!p||p.status==="idle"){$("#progcur").textContent="idle — pick a target above and hit Sweep";return;}
+  if(!p||p.status==="idle"){$("#progcur").textContent="idle — pilih target di atas lalu klik Sweep";return;}
   const pct=p.total?Math.round(100*p.index/p.total):(p.status==="done"?100:5);
   $("#progbar").style.width=pct+"%";
   $("#progbar").style.background=p.status==="error"?"var(--red)":(p.status==="done"?"var(--green)":"var(--cyan)");
@@ -399,7 +515,7 @@ async function saveConfig(){
   loadConfig();
 }
 
-tick(); setInterval(()=>{if(tab==="monitor")tick();},3000);
+tick(); setInterval(()=>{if(tab==="monitor"||tab==="defense")tick();},3000);
 </script>
 </body>
 </html>

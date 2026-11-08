@@ -37,7 +37,7 @@ with monitoring, one-click scope-enforced sweeps, flag review, and config manage
 
 ## Status
 
-**Release candidate.** All build phases implemented; 196 automated tests passing; 13/14
+**Release candidate.** All build phases implemented; 206 automated tests passing; 13/14
 acceptance criteria verified in the local lab (the last depends on the official briefing and
 is deliberately left pending). See:
 
