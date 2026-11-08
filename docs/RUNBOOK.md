@@ -18,6 +18,20 @@ inbox, copy/mark flags, defense monitor, scoring, reports, and the lab self-test
 selecting a number and answering prompts. Everything below is also available as direct
 subcommands for speed.
 
+**Browser UI — the Web Console.** For a clear, clickable dashboard with controls and config:
+
+```bash
+aether web                 # prints a tokenised http://127.0.0.1:8787/?token=… URL — open it
+aether web --port 9000     # choose the port (localhost only, never exposed)
+```
+
+It serves four tabs — **Monitor** (live health/integrity/incidents/flags/patch-log/tick/
+resources, auto-refreshing), **Attack** (one-click scope-enforced sweep per authorized target),
+**Flags** (review, reveal, and mark submitted/accepted), and **Config** (view scope +
+readiness, edit and save the YAML). It binds to localhost only, mutating actions require the
+token in the URL, scope stays fail-closed, config save refuses to disable scope, and AETHER
+never auto-submits — exactly like the CLI.
+
 ## 1. Before the round — configure scope (CRITICAL)
 
 ```bash
@@ -46,6 +60,8 @@ intentional. Do not set `scope.enforce: false` during the competition.
 .venv/bin/aether attack sweep <host> --no-login           # skip the login step
 #   On success you'll see "✓ logged in as <user> … — attacking authenticated"; every exploit
 #   module then carries the session cookie, so vulns hidden behind the login are reachable.
+#   Login is CSRF-aware: it discovers the real login pages, reads the form's hidden CSRF token
+#   and field names from a GET, and submits them — so token-protected logins work too.
 
 # AFTER A FOOTHOLD — local priv-esc ENUMERATION (read-only; you escalate by hand):
 .venv/bin/aether attack privesc <host>                    # id / sudo -l / SUID / caps / cron

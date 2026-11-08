@@ -10,10 +10,15 @@ continuous objectives during an authorized Attack & Defense competition:
    human operator for **manual** submission. Initial access is via the web, but A&D flags live
    on the **server filesystem** — so the RCE-capable modules read the flag off the server
    (`/root/root.txt`, `/home/*/user.txt`, or wherever a `grep` for the flag prefix finds it).
-   It **auto-logs-in** (default/weak or operator creds) to attack behind the login, and offers
-   read-only **priv-esc enumeration** (`id`/`sudo -l`/SUID/caps/cron) after a foothold.
+   It **auto-logs-in** (CSRF-aware, default/weak or operator creds) to attack behind the login,
+   and offers read-only **priv-esc enumeration** (`id`/`sudo -l`/SUID/caps/cron) after a
+   foothold.
 2. **DEFENSE** — monitor our own services, detect compromise, perform safe and reversible
    remediation, and preserve flag data, service functionality, and availability.
+
+Drive it from the terminal (`aether`, or direct subcommands), the live TUI dashboard
+(`aether monitor dashboard`), or the **browser Web Console** (`aether web`) — a localhost UI
+with monitoring, one-click scope-enforced sweeps, flag review, and config management.
 
 ## Non-negotiable safety rules
 

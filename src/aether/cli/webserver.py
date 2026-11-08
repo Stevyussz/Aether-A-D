@@ -1,0 +1,326 @@
+"""AETHER Web Console — a local browser UI for monitoring and control.
+
+A lightweight dashboard served over HTTP on localhost ONLY (127.0.0.1), built on the Python
+standard library (no extra web-framework dependency, nothing exposed to the network). It
+shows the same REAL data as the terminal dashboard (service health, file integrity,
+incidents, flag inbox, patch log, tick clock, resources) and offers the safe operator
+controls: run a scope-enforced attack sweep, run a defense sweep, reveal/mark flags, and
+view/validate/save config.
+
+Every safety invariant holds exactly as in the CLI:
+- bound to 127.0.0.1 only; mutating actions require the one-time token printed at startup;
+- scope is fail-closed (out-of-scope sweeps refused); AETHER NEVER auto-submits flags
+  (``mark`` only records what the operator did on the portal);
+- config save refuses to disable scope enforcement or empty the target list (fail closed),
+  and auto-submit can never be turned on.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import secrets
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+import psutil
+
+from ..core.config_manager import assess_readiness, load_config
+from ..core.models import SubmissionStatus
+from ..core.orchestrator import Orchestrator
+from ..scoring.timing import TickClock
+from .web_page import PAGE
+
+
+class Backend:
+    """Holds a persistent orchestrator on a background asyncio loop; callable from threads."""
+
+    def __init__(self, cfg, config_path: Path) -> None:
+        self.cfg = cfg
+        self.config_path = Path(config_path)
+        self.loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._runner, daemon=True)
+        self.orch = None
+        self.inbox = None
+        self.defense = None
+        self.sweeps = 0
+        self.started = time.time()
+
+    # --- lifecycle --------------------------------------------------------------------
+    def start(self) -> None:
+        self._thread.start()
+        self._call(self._startup(), timeout=20)
+        psutil.cpu_percent(interval=None)  # prime
+
+    def _runner(self) -> None:
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def _call(self, coro, timeout: float = 120):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=timeout)
+
+    async def _startup(self) -> None:
+        from ..attack.flags.inbox import FlagInbox
+        from ..attack.flags.validator import FlagValidator
+        from ..defense.engine import DefenseEngine
+
+        self.orch = Orchestrator(self.cfg)
+        await self.orch.start()
+        self.inbox = FlagInbox(self.orch.state, FlagValidator(self.cfg.flags.pattern),
+                               events=self.orch.events)
+        self.defense = DefenseEngine(self.orch)
+        for t in self.cfg.scope.targets:
+            notes = getattr(t, "notes", None)
+            if t.owner == "self" and notes and Path(notes).exists():
+                self.defense.watch_path(t.name, notes)
+
+    def shutdown(self) -> None:
+        try:
+            self._call(self.orch.shutdown(), timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
+        self.loop.call_soon_threadsafe(self.loop.stop)
+
+    # --- read snapshots ---------------------------------------------------------------
+    def state(self) -> dict:
+        return self._call(self._state())
+
+    async def _state(self) -> dict:
+        from .dashboard import _gather
+
+        self.sweeps += 1
+        incidents, health, functional, integrity, flags, mods = await _gather(
+            self.defense, self.orch.state, None)
+        tick = TickClock(self.cfg.scoring.tick_seconds, self.cfg.scoring.epoch)
+        tinfo = tick.info() if tick.configured else None
+        vm = psutil.virtual_memory()
+        try:
+            rss = psutil.Process().memory_info().rss / (1024 * 1024)
+        except Exception:  # noqa: BLE001
+            rss = 0.0
+
+        by_val: dict[str, int] = {}
+        by_sub: dict[str, int] = {}
+        for f in flags:
+            by_val[f["validation"]] = by_val.get(f["validation"], 0) + 1
+            by_sub[f["submission"]] = by_sub.get(f["submission"], 0) + 1
+
+        return {
+            "tick": (None if tinfo is None else
+                     {"tick": tinfo.tick, "next_in": round(tinfo.seconds_to_next, 1)}),
+            "sweeps": self.sweeps,
+            "uptime": int(time.time() - self.started),
+            "incidents": [{"severity": getattr(i.severity, "value", str(i.severity)),
+                           "kind": i.kind, "summary": i.summary} for i in incidents],
+            "services": [{"service": h.service, "up": bool(h.up),
+                          "latency_ms": round(h.latency_ms, 1),
+                          "functional": (None if functional.get(h.service) is None else
+                                         bool(functional[h.service].passed))}
+                         for h in health],
+            "integrity": [{"path": name, "baseline": bn,
+                           "clean": bool(rep.clean),
+                           "added": len(rep.added), "modified": len(rep.modified),
+                           "removed": len(rep.removed)}
+                          for name, (bn, rep) in integrity.items()],
+            "flags": {"total": len(flags), "by_validation": by_val, "by_submission": by_sub},
+            "mods": [{"ts": (m.get("ts") or "")[11:19], "component": m.get("component", ""),
+                      "action": m.get("action", ""), "target": m.get("target") or ""}
+                     for m in mods[:8]],
+            "resources": {"cpu": psutil.cpu_percent(interval=None),
+                          "mem_percent": vm.percent,
+                          "mem_free_mib": vm.available // (1024 * 1024),
+                          "rss_mib": round(rss)},
+        }
+
+    def flags(self, show: bool) -> dict:
+        return self._call(self._flags(show))
+
+    async def _flags(self, show: bool) -> dict:
+        rows = await self.inbox.list()
+        out = []
+        for r in rows:
+            val = r["value"] if show else (r["value"][:6] + "…" + "•" * 4)
+            out.append({"key": r["dedup_key"], "key_short": r["dedup_key"][:10],
+                        "value": val, "target": r["target"], "module": r["module"],
+                        "validation": r["validation"], "submission": r["submission"],
+                        "tick": r["tick"] or "-", "seen": r["seen_count"]})
+        return {"flags": out, "revealed": show}
+
+    def config_view(self) -> dict:
+        r = assess_readiness(self.cfg)
+        try:
+            text = self.config_path.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        return {
+            "path": str(self.config_path), "ready": r.ready,
+            "issues": r.issues, "warnings": r.warnings, "yaml": text,
+            "pattern": self.cfg.flags.pattern, "tick": self.cfg.scoring.tick_seconds,
+            "enforce": self.cfg.scope.enforce,
+            "targets": [{"name": t.name, "host": t.host,
+                         "ports": list(t.ports), "kind": t.kind, "owner": t.owner}
+                        for t in self.cfg.scope.targets],
+        }
+
+    # --- mutating actions (token-gated) -----------------------------------------------
+    def sweep(self, host: str, port: int | None) -> dict:
+        return self._call(self._sweep(host, port), timeout=600)
+
+    async def _sweep(self, host: str, port: int | None) -> dict:
+        from ..attack.engine import AttackEngine
+        from ..attack.memory import ExploitMemory
+        from ..attack.sweep import AttackSweep
+        from ..core.plugin import RunContext
+
+        kind_by_host = {t.host: t.kind for t in self.cfg.scope.targets}
+        port_by_host = {t.host: (t.ports[0] if t.ports else 80) for t in self.cfg.scope.targets}
+        p = port or port_by_host.get(host, 80)
+        if not self.orch.scope.check(host, p).allowed:
+            return {"error": f"{host}:{p} is NOT in authorized scope (fail closed)"}
+        sweep = AttackSweep(AttackEngine(self.orch, self.inbox),
+                            memory=ExploitMemory(self.orch.state))
+        report = await sweep.run(
+            RunContext(target_host=host, target_port=p,
+                       service=kind_by_host.get(host, "web")),
+            recon=True, login=True)
+        return {"summary": report.summary(), "confirmed": report.confirmed_modules,
+                "flags": len(report.flags_found), "authenticated": report.authenticated,
+                "login_as": report.login_as}
+
+    def defense_sweep(self) -> dict:
+        return self._call(self._defense_sweep())
+
+    async def _defense_sweep(self) -> dict:
+        incidents = await self.defense.sweep()
+        return {"incidents": len(incidents)}
+
+    def mark(self, key: str, status: str) -> dict:
+        return self._call(self._mark(key, status))
+
+    async def _mark(self, key: str, status: str) -> dict:
+        try:
+            st = SubmissionStatus(status)
+        except ValueError:
+            return {"error": f"invalid status {status!r}"}
+        ok = await self.inbox.mark_submitted(key, st)
+        return {"ok": bool(ok)}
+
+    def config_save(self, yaml_text: str) -> dict:
+        import tempfile
+
+        tmp = Path(tempfile.gettempdir()) / f"aether_cfg_{secrets.token_hex(6)}.yaml"
+        tmp.write_text(yaml_text, encoding="utf-8")
+        try:
+            cfg = load_config(tmp)  # raises on auto_submit=true and on parse errors
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"invalid config: {exc}"}
+        finally:
+            tmp.unlink(missing_ok=True)
+        # Fail-closed guard: the web UI must never be able to loosen scope.
+        if not cfg.scope.enforce:
+            return {"error": "refused: scope.enforce=false would disable fail-closed scope"}
+        if not cfg.scope.targets:
+            return {"error": "refused: empty scope.targets (fail closed)"}
+        self.config_path.write_text(yaml_text, encoding="utf-8")
+        self.cfg = cfg  # new sweeps read this; restart the console to re-arm the live engine
+        r = assess_readiness(cfg)
+        return {"ok": True, "ready": r.ready, "issues": r.issues, "warnings": r.warnings,
+                "note": "saved — restart the web console to apply scope to the live engine"}
+
+
+def _make_handler(backend: Backend, token: str):
+    def _json(h, obj, status=200):
+        data = json.dumps(obj).encode()
+        h.send_response(status)
+        h.send_header("Content-Type", "application/json")
+        h.send_header("Content-Length", str(len(data)))
+        h.end_headers()
+        h.wfile.write(data)
+
+    class _H(BaseHTTPRequestHandler):
+        def _authed(self) -> bool:
+            if self.headers.get("X-AETHER-Token") == token:
+                return True
+            q = parse_qs(urlparse(self.path).query)
+            return q.get("token", [""])[0] == token
+
+        def do_GET(self):  # noqa: N802
+            path = urlparse(self.path).path
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                if path in ("/", "/index.html"):
+                    body = PAGE.replace("__TOKEN__", token).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif path == "/api/state":
+                    _json(self, backend.state())
+                elif path == "/api/flags":
+                    _json(self, backend.flags(q.get("show", ["0"])[0] == "1"))
+                elif path == "/api/config":
+                    _json(self, backend.config_view())
+                else:
+                    _json(self, {"error": "not found"}, 404)
+            except Exception as exc:  # noqa: BLE001
+                _json(self, {"error": f"{type(exc).__name__}: {exc}"}, 500)
+
+        def do_POST(self):  # noqa: N802
+            path = urlparse(self.path).path
+            if not self._authed():
+                _json(self, {"error": "forbidden: missing/invalid token"}, 403)
+                return
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length).decode("utf-8", "replace") if length else "{}"
+            try:
+                payload = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                if path == "/api/attack/sweep":
+                    _json(self, backend.sweep(payload.get("host", ""),
+                                              payload.get("port")))
+                elif path == "/api/defense/sweep":
+                    _json(self, backend.defense_sweep())
+                elif path == "/api/flags/mark":
+                    _json(self, backend.mark(payload.get("key", ""),
+                                             payload.get("status", "SUBMITTED")))
+                elif path == "/api/config/save":
+                    _json(self, backend.config_save(payload.get("yaml", "")))
+                else:
+                    _json(self, {"error": "not found"}, 404)
+            except Exception as exc:  # noqa: BLE001
+                _json(self, {"error": f"{type(exc).__name__}: {exc}"}, 500)
+
+        def log_message(self, *args):  # silence default logging
+            return
+
+    return _H
+
+
+def serve(cfg, config_path, host: str = "127.0.0.1", port: int = 8787) -> None:
+    """Start the web console (blocking). Binds localhost only and prints the access URL+token."""
+    from .context import console
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        host = "127.0.0.1"  # never expose beyond localhost
+    backend = Backend(cfg, config_path)
+    backend.start()
+    token = secrets.token_urlsafe(16)
+    httpd = ThreadingHTTPServer((host, port), _make_handler(backend, token))
+    bound = httpd.server_address[1]
+    url = f"http://{host}:{bound}/?token={token}"
+    console.print(f"[bold green]AETHER Web Console[/] → [bold cyan]{url}[/]")
+    console.print("[dim]localhost only • token-gated actions • AETHER never auto-submits • "
+                  "Ctrl-C to stop[/]")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]stopping web console…[/]")
+    finally:
+        httpd.shutdown()
+        backend.shutdown()

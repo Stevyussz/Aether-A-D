@@ -13,6 +13,10 @@ session. Scope is enforced by the orchestrator before this runs.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
+from urllib.parse import urljoin
+
 import httpx
 
 from ...core.models import ModuleResult, TaskState
@@ -55,10 +59,75 @@ def _parse_creds(context: RunContext) -> list[tuple[str, str]]:
     return creds
 
 
-def _form(user: str, pw: str) -> dict:
-    data = {f: user for f in USER_FIELDS}
-    data.update({f: pw for f in PASS_FIELDS})
-    data["submit"] = "Login"
+@dataclass
+class _LoginForm:
+    action: str = ""
+    method: str = "POST"
+    hidden: dict = field(default_factory=dict)   # hidden inputs incl. CSRF token
+    user_field: str | None = None
+    pass_field: str | None = None
+
+
+class _FormParser(HTMLParser):
+    """Find the login form (the one with a password input) and its fields/CSRF token."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.forms: list[_LoginForm] = []
+        self._cur: _LoginForm | None = None
+
+    def handle_starttag(self, tag: str, attrs_list: list) -> None:
+        a = dict(attrs_list)
+        if tag == "form":
+            self._cur = _LoginForm(action=a.get("action", ""),
+                                   method=(a.get("method") or "POST").upper())
+        elif tag == "input" and self._cur is not None:
+            name = a.get("name")
+            if not name:
+                return
+            itype = (a.get("type") or "text").lower()
+            if itype == "hidden":
+                self._cur.hidden[name] = a.get("value", "")
+            elif itype == "password" or name.lower() in PASS_FIELDS:
+                self._cur.pass_field = name
+            elif self._cur.user_field is None and (
+                    itype in ("text", "email") or name.lower() in USER_FIELDS):
+                self._cur.user_field = name
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "form" and self._cur is not None:
+            self.forms.append(self._cur)
+            self._cur = None
+
+
+def _pick_login_form(html: str) -> _LoginForm | None:
+    parser = _FormParser()
+    try:
+        parser.feed(html)
+    except Exception:  # noqa: BLE001 - never let malformed HTML crash login
+        return None
+    # Prefer a form that has a password field (the real login form).
+    for form in parser.forms:
+        if form.pass_field:
+            return form
+    return parser.forms[0] if parser.forms else None
+
+
+def _form_data(user: str, pw: str, form: _LoginForm | None) -> dict:
+    """Build POST data: CSRF/hidden fields + the detected user/pass fields, with name
+    aliases sprayed as a safety net so it also works when there is no parseable form."""
+    data: dict[str, str] = {}
+    if form is not None:
+        data.update(form.hidden)                         # keep the CSRF token etc.
+        if form.user_field:
+            data[form.user_field] = user
+        if form.pass_field:
+            data[form.pass_field] = pw
+    for f in USER_FIELDS:
+        data.setdefault(f, user)
+    for f in PASS_FIELDS:
+        data.setdefault(f, pw)
+    data.setdefault("submit", "Login")
     return data
 
 
@@ -96,27 +165,54 @@ class WebLoginModule(Module):
                       if any(w in e.lower() for w in ("login", "signin", "auth", "session"))]
         endpoints = list(dict.fromkeys([*discovered, *LOGIN_ENDPOINTS]))
         creds = _parse_creds(context)
-        cap = int(context.extra.get("max_login_attempts", 60))
+        cap = int(context.extra.get("max_login_attempts", 40))
         verify = bool(context.extra.get("tls_verify", False))
 
+        # Phase 1 — discovery: one GET per endpoint to find the REAL login pages (don't spray
+        # creds blindly at endpoints that aren't logins; keeps it fast and quiet). API
+        # endpoints are tried as JSON logins without a discovery GET.
+        candidates: list[tuple[str, _LoginForm | None, bool]] = []
+        async with httpx.AsyncClient(timeout=self.meta.timeout, follow_redirects=True,
+                                     verify=verify) as disco:
+            for ep in endpoints:
+                if ep.startswith("/api") or ep.endswith(".json"):
+                    candidates.append((ep, None, True))
+                    continue
+                try:
+                    page = await disco.get(base + ep)
+                except httpx.HTTPError:
+                    continue
+                if page.status_code == 200 and "html" in page.headers.get("content-type", ""):
+                    form = _pick_login_form(page.text)
+                    if (form and form.pass_field) or "password" in page.text.lower():
+                        candidates.append((ep, form, False))
+
+        # Phase 2 — spray the weak/default (or operator) creds at the login pages only.
         attempts = 0
-        tried: list[str] = []
-        for ep in endpoints:
+        for ep, disc_form, is_api in candidates:
             for user, pw in creds:
                 if attempts >= cap:
                     break
                 attempts += 1
-                tried.append(f"{ep} {user}:{'*' * len(pw)}")
                 try:
                     # Fresh client per attempt so the cookie jar reflects only this login.
                     async with httpx.AsyncClient(timeout=self.meta.timeout,
                                                  follow_redirects=True, verify=verify) as client:
-                        form = _form(user, pw)
-                        if ep.startswith("/api") or ep.endswith(".json"):
+                        if is_api:
                             resp = await client.post(base + ep,
                                                      json={"username": user, "password": pw})
                         else:
-                            resp = await client.post(base + ep, data=form)
+                            # CSRF-aware: re-GET to refresh a single-use token, then POST it back.
+                            form = disc_form
+                            try:
+                                page = await client.get(base + ep)
+                                if "html" in page.headers.get("content-type", ""):
+                                    form = _pick_login_form(page.text) or disc_form
+                            except httpx.HTTPError:
+                                pass
+                            action = urljoin(base + ep, form.action) if (form and form.action) \
+                                else base + ep
+                            resp = await client.post(action, data=_form_data(user, pw, form))
                         had_cookie = len(client.cookies) > 0
                         if _looks_authenticated(resp, had_cookie):
                             cookies = {k: v for k, v in client.cookies.items()}
@@ -136,7 +232,8 @@ class WebLoginModule(Module):
 
         return ModuleResult(
             module=self.identifier, target=host, state=TaskState.SUCCEEDED,
-            detail=f"no login succeeded in {attempts} attempt(s) "
-                   f"(tried default/weak creds across {len(endpoints)} endpoint(s))",
-            data={"authenticated": False, "cookies": {}, "attempts": attempts},
+            detail=f"no login succeeded ({attempts} attempt(s) across "
+                   f"{len(candidates)} login page(s) of {len(endpoints)} probed)",
+            data={"authenticated": False, "cookies": {}, "attempts": attempts,
+                  "login_pages": len(candidates)},
         )

@@ -86,6 +86,27 @@ def version() -> None:
 
 
 @app.command()
+def web(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    port: int = typer.Option(8787, "--port", "-p", help="Local port (localhost only)."),
+) -> None:
+    """Launch the AETHER Web Console — a browser dashboard with monitoring + safe controls.
+
+    Serves on 127.0.0.1 ONLY and prints a tokenised URL. Shows live monitoring (health,
+    integrity, incidents, flags, patch log, tick, resources) and offers scope-enforced attack
+    sweeps, defense sweeps, flag review/mark, and config view/validate/save — never
+    auto-submitting and never loosening scope.
+    """
+    try:
+        cfg, path = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+    from .webserver import serve
+    serve(cfg, path, port=port)
+
+
+@app.command()
 def init(
     force: bool = typer.Option(False, "--force", help="Overwrite an existing config."),
 ) -> None:

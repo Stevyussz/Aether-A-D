@@ -66,6 +66,7 @@ def _menu_items():
         ("8", "Mark flag submitted", "record that you submitted/accepted a flag", _a_flags_mark),
         ("9", "Defense · status", "services/integrity watched", _a_defense_status),
         ("10", "Defense · live dashboard", "real health/integrity/incidents/stats screen", _a_monitor_dashboard),
+        ("16", "Web console (browser UI)", "dashboard + controls + config in your browser", _a_web),
         ("15", "Defense · plain monitor", "simple text sweep loop (Ctrl-C to stop)", _a_monitor_start),
         ("11", "Scoring status", "tick clock + score history (if configured)", _a_scoring_show),
         ("12", "Generate report", "operator report (flag values hidden)", _a_report),
@@ -89,6 +90,7 @@ def _a_scoring_show(): return ["scoring", "show"]
 def _a_report(): return ["report", "generate"]
 def _a_lab_test(): return ["lab", "test"]
 def _a_modules_list(): return ["modules", "list"]
+def _a_web(): return ["web"]
 
 
 def _a_attack_sweep():
