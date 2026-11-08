@@ -195,5 +195,7 @@ pengalaman B2R kalian jalan: baca aplikasinya, cari yang "aneh".
 > **Patch dirimu dulu, jaga service tetap hidup, lalu curi flag lawan tiap tick — konsisten
 > mengalahkan heroik.**
 
+Belum pernah A&D & waktu mepet? Mulai dari **[PREP-4DAYS.md](PREP-4DAYS.md)** — rencana belajar
+4 hari terarah (room spesifik + skill + trik, di dalam scope).
 Untuk perintah spesifik (AETHER + manual), buka **[CHEATSHEET.md](CHEATSHEET.md)**.
 Untuk alur operasional lengkap, **[RUNBOOK.md](RUNBOOK.md)**.

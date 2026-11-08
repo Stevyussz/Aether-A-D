@@ -41,6 +41,8 @@ with monitoring, one-click scope-enforced sweeps, flag review, and config manage
 acceptance criteria verified in the local lab (the last depends on the official briefing and
 is deliberately left pending). See:
 
+- `docs/PREP-4DAYS.md` — **focused 4-day study plan** (what to learn/skip within scope, exact
+  THM/VulnHub rooms, skills to master, tricks) for a team new to A&D with little time
 - `docs/STRATEGY.md` — **A&D game plan for a team new to Attack & Defense** (roles, first 5
   minutes, the per-tick loop, scoring model, beginner mistakes, game-day checklist)
 - `docs/CHEATSHEET.md` — quick command reference: AETHER + the manual bits (enumeration,
