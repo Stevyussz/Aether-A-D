@@ -314,6 +314,19 @@ class Backend:
         return {"outcome": result.outcome.value, "safe": result.safe,
                 "steps": result.steps, "detail": result.detail}
 
+    def audit(self) -> dict:
+        return self._call(self._audit(), timeout=120)
+
+    async def _audit(self) -> dict:
+        findings = self.defense.audit_sources()
+        by_sev: dict[str, int] = {}
+        for f in findings:
+            by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+        return {"by_severity": by_sev,
+                "findings": [{"severity": f.severity, "category": f.category, "path": f.path,
+                              "line": f.line, "snippet": f.snippet,
+                              "remediation": f.remediation} for f in findings]}
+
     def defense_sweep(self) -> dict:
         return self._call(self._defense_sweep())
 
@@ -472,6 +485,8 @@ def _make_handler(backend: Backend, token: str):
                     _json(self, backend.defense_sweep())
                 elif path == "/api/defense/quarantine":
                     _json(self, backend.quarantine(payload.get("path", "")))
+                elif path == "/api/defense/audit":
+                    _json(self, backend.audit())
                 elif path == "/api/flags/mark":
                     _json(self, backend.mark(payload.get("key", ""),
                                              payload.get("status", "SUBMITTED")))

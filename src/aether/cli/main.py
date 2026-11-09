@@ -391,6 +391,60 @@ def defense_webshells(
     asyncio.run(_run())
 
 
+@defense_app.command("audit")
+def defense_audit(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    path: str = typer.Option(None, "--path", help="Audit this directory instead of scope."),
+) -> None:
+    """Self-audit our own service source for exploitable sinks (LFI/cmdi/SSTI/SQLi/upload/...).
+
+    'Patch yourself first' — this is the highest-value defensive move. Read-only static
+    analysis; prints each finding with file:line, severity, and a concrete remediation.
+    """
+    import asyncio
+
+    from ..core.orchestrator import Orchestrator
+    from ..defense.engine import DefenseEngine
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            engine = DefenseEngine(orch)
+            if path:
+                engine.watch_path("cli", path)
+            else:
+                _watch_self_roots(engine, cfg)
+            findings = engine.audit_sources()
+            if not findings:
+                console.print("[green]✓ no obvious exploitable sinks found in our source[/]")
+                console.print("[dim]Still verify manually; a clean static scan is not a "
+                              "guarantee.[/]")
+                return
+            colour = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow", "LOW": "cyan"}
+            table = Table(title="Self-audit — patch these before opponents do")
+            table.add_column("severity"); table.add_column("category")
+            table.add_column("location"); table.add_column("fix", overflow="fold")
+            for f in findings:
+                loc = f"{f.path}:{f.line}" if f.line else f.path
+                c = colour.get(f.severity, "white")
+                table.add_row(f"[{c}]{f.severity}[/]", f.category, loc, f.remediation)
+            console.print(table)
+            crit = sum(1 for f in findings if f.severity in ("CRITICAL", "HIGH"))
+            console.print(f"[bold]{len(findings)} finding(s), {crit} high/critical.[/] "
+                          "[dim]Patch, keep the service UP, then re-run this audit.[/]")
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(_run())
+
+
 @defense_app.command("quarantine")
 def defense_quarantine(
     target: str = typer.Argument(..., help="Absolute path of the shell to quarantine."),

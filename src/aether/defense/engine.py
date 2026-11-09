@@ -21,6 +21,7 @@ from .patch_manager import PatchManager
 from .recovery_manager import RecoveryManager
 from .service_monitor import ServiceFunctionalityChecker, ServiceHealthMonitor
 from .vulnerability_assessment import VulnerabilityAssessment
+from .source_audit import AuditFinding, SourceAuditor
 from .webshell_scanner import WebshellHit, WebshellScanner
 
 log = get_logger("defense_engine")
@@ -43,6 +44,7 @@ class DefenseEngine:
         self.backups = BackupManager(backup_root)
         self.integrity: dict[str, IntegrityMonitor] = {}
         self.webshells = WebshellScanner()
+        self.auditor = SourceAuditor()
         self._roots: dict[str, Path] = {}      # name -> watched root (for webshell scans)
         self.quarantine_dir = Path(backup_root).parent / "quarantine"
         self.incidents = IncidentDetector(events=orch.events)
@@ -63,6 +65,22 @@ class DefenseEngine:
         for root in self._roots.values():
             hits.extend(self.webshells.scan_root(root))
         return hits
+
+    def audit_sources(self, root: str | Path | None = None) -> list[AuditFinding]:
+        """Static self-audit of our own service source for exploitable sinks (read-only).
+
+        'Patch yourself first': finds the LFI/cmdi/SSTI/SQLi/upload/exposed-file issues an
+        opponent would exploit, with file:line + a remediation hint. Scans one root if given,
+        else every watched self-owned root.
+        """
+        roots = [Path(root)] if root is not None else list(self._roots.values())
+        findings: list[AuditFinding] = []
+        for r in roots:
+            findings.extend(self.auditor.audit_root(r))
+        # Most severe first.
+        order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+        findings.sort(key=lambda f: order.get(f.severity, 9))
+        return findings
 
     async def sweep(self, log_text: str | None = None) -> list[Incident]:
         """One monitoring pass: health + integrity + logs + webshells -> incidents."""

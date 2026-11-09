@@ -147,9 +147,16 @@ PAGE = r"""<!DOCTYPE html>
         dengan aman (backup dulu, reversible). Service tetap harus UP (dicek juri/SLA).</p>
       <div class="row">
         <button class="act" onclick="defSweep()">Jalankan defense sweep</button>
+        <button class="act" onclick="defAudit()">Self-audit source (patch diri dulu)</button>
         <button class="ghost" onclick="tick()">Scan ulang web shell</button>
         <span class="muted" id="defout"></span>
       </div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="card"><h3>self-audit — sink yang bisa di-exploit lawan (patch SEBELUM kebobolan)</h3>
+      <p class="muted">Cerminan arsenal attack ke dalam: LFI/cmdi/SSTI/SQLi/upload/file ke-expose
+        di source service kita, lengkap dengan saran patch. Read-only.</p>
+      <div id="def-audit"><span class="mut">Klik "Self-audit source" untuk memindai.</span></div>
     </div>
     <div style="height:14px"></div>
     <div class="kpi" id="defkpi"></div>
@@ -390,6 +397,17 @@ async function defSweep(){
   const r=await postJSON("/api/defense/sweep",{});
   $("#defout").textContent=`defense sweep selesai: ${r.incidents} incident(s)`;
   tick();
+}
+async function defAudit(){
+  $("#def-audit").innerHTML='<span class="mut">memindai source…</span>';
+  const r=await postJSON("/api/defense/audit",{});
+  if(r.error){$("#def-audit").innerHTML='<span class="down">✗ '+esc(r.error)+'</span>';return;}
+  const fs=r.findings||[];
+  if(!fs.length){$("#def-audit").innerHTML='<span class="up">✓ tidak ada sink mencolok. Tetap cek manual.</span>';return;}
+  const sevcls=s=>({CRITICAL:"sev-CRITICAL",HIGH:"sev-CRITICAL",MEDIUM:"sev-WARNING",LOW:"sev-INFO"}[s]||"");
+  $("#def-audit").innerHTML='<div class="muted" style="margin-bottom:6px">'+Object.entries(r.by_severity||{}).map(([k,v])=>k+": "+v).join(" · ")+'</div>'+
+    '<table><tr><th>severity</th><th>category</th><th>location</th><th>fix</th></tr>'+
+    fs.map(f=>`<tr><td class="${sevcls(f.severity)}">${esc(f.severity)}</td><td>${esc(f.category)}</td><td class="mono">${esc(f.path)}${f.line?(":"+f.line):""}</td><td class="muted">${esc(f.remediation)}</td></tr>`).join("")+'</table>';
 }
 async function quarantineDef(i){
   const w=(window._shells||[])[i]; if(!w)return;
