@@ -1057,6 +1057,46 @@ def attack_stop() -> None:
     console.print("[green]✓ stop signal written (runtime/attack.stop)[/]")
 
 
+@attack_app.command("oast")
+def attack_oast(
+    port: int = typer.Option(0, "--port", "-p", help="Listen port (0 = auto)."),
+    pub_host: str = typer.Option("127.0.0.1", "--pub-host",
+                                 help="IP to advertise in callback URLs (your team IP)."),
+    listen: str = typer.Option("0.0.0.0", "--listen", help="Bind address."),
+) -> None:
+    """Start a self-hosted OAST listener to catch blind SSRF/RCE/XXE callbacks.
+
+    Mints a unique callback URL; inject it into a blind payload. A ping-back confirms the bug
+    (and may carry exfiltrated data). Ctrl-C to stop. Receives only — never attacks.
+    """
+    import time as _time
+
+    from ..attack.oast import OastListener
+
+    oast = OastListener(pub_host=pub_host)
+    bound = oast.start(listen_host=listen, listen_port=port, pub_host=pub_host)
+    token = oast.new_token()
+    console.print(f"[bold green]OAST listener[/] on [cyan]{listen}:{bound}[/] "
+                  f"(advertising [cyan]{pub_host}[/])")
+    console.print(f"[bold]Inject this callback URL into a blind payload:[/] "
+                  f"[yellow]{oast.payload_url(token)}[/]")
+    console.print("[dim]waiting for callbacks • Ctrl-C to stop[/]")
+    seen = 0
+    try:
+        while True:
+            _time.sleep(1.0)
+            its = oast.interactions(limit=100)
+            if len(its) > seen:
+                for it in reversed(its[:len(its) - seen]):
+                    console.print(f"[green]● HIT[/] {it['ts']} {it['method']} "
+                                  f"[cyan]{it['path']}[/] token=[bold]{it['token']}[/] "
+                                  f"src={it['src_ip']}")
+                seen = len(its)
+    except KeyboardInterrupt:
+        oast.stop()
+        console.print("\n[dim]OAST listener stopped[/]")
+
+
 @flags_app.command("inbox")
 def flags_inbox(
     config: str = typer.Option(None, "--config", "-c", help="Config path."),

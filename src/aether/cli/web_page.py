@@ -142,6 +142,25 @@ PAGE = r"""<!DOCTYPE html>
       <div id="progintel"></div>
       <div class="log" id="attackout" style="max-height:220px;overflow:auto"></div>
     </div>
+    <div style="height:14px"></div>
+    <div class="card">
+      <h3>OAST — out-of-band callback (konfirmasi blind SSRF/RCE/XXE)</h3>
+      <p class="muted">Listener self-hosted (data callback mendarat di box kita, bukan server
+        publik). Start listener, mint URL unik, suntik ke payload blind; kalau target ping balik
+        = vuln terkonfirmasi (sering bawa data exfil di path/body).</p>
+      <div class="row" style="margin-top:6px">
+        <label class="muted">listen port <input id="oast-port" type="number" value="0" style="width:78px" class="builder-in"></label>
+        <label class="muted">pub host (IP tim kita) <input id="oast-pub" type="text" placeholder="10.60.x.x" style="width:120px" class="builder-in"></label>
+        <button class="act" onclick="oastStart()">Start</button>
+        <button class="ghost" onclick="oastStop()">Stop</button>
+        <button class="act" onclick="oastToken()">Mint URL</button>
+        <button class="ghost" onclick="loadOast()">Refresh</button>
+      </div>
+      <div class="row" style="margin-top:6px"><span class="muted" id="oast-stat">listener: stopped</span></div>
+      <div id="oast-url"></div>
+      <div style="height:8px"></div>
+      <div id="oast-list"><span class="mut">belum ada interaksi.</span></div>
+    </div>
   </section>
 
   <section id="defense" class="hide">
@@ -613,6 +632,30 @@ async function replayCapture(id){
   const r=await postJSON("/api/attack/replay",{id});
   $("#traf-stat").textContent = r.error?("⚠ "+r.error):(r.summary||"selesai");
   loadFlags&&loadFlags();
+}
+async function oastStart(){
+  const lp=parseInt($("#oast-port").value||"0",10)||0;
+  const pub=($("#oast-pub").value||"").trim();
+  const r=await postJSON("/api/attack/oast",{action:"start",listen_port:lp,pub_host:pub});
+  if(r.error){$("#oast-stat").textContent="⚠ "+r.error;return;}
+  loadOast();
+}
+async function oastStop(){await postJSON("/api/attack/oast",{action:"stop"});loadOast();}
+async function oastToken(){
+  const r=await postJSON("/api/attack/oast",{action:"token"});
+  if(r.error){$("#oast-url").innerHTML='<span class="down">⚠ '+esc(r.error)+'</span>';return;}
+  $("#oast-url").innerHTML='<div class="muted">suntik URL ini ke payload blind:</div><code style="user-select:all">'+esc(r.url)+'</code>';
+}
+async function loadOast(){
+  const r=await getJSON("/api/attack/oast");
+  const st=r.stats||{};
+  $("#oast-stat").textContent=(st.running?`listener: RUNNING (:${st.listen_port}, pub ${st.pub_host})`:"listener: stopped")+` · hits: ${st.total||0}`;
+  const its=r.interactions||[];
+  $("#oast-list").innerHTML = its.length? its.map(i=>
+    `<div style="border-bottom:1px solid var(--line);padding:4px 0"><span class="mut">${esc(i.ts)}</span>
+     <b>${esc(i.method)}</b> <code>${esc((i.path||'').slice(0,100))}</code>
+     <span class="up">token ${esc(i.token)}</span> <span class="mut">src ${esc(i.src_ip)}</span></div>`).join("")
+    : '<span class="mut">belum ada interaksi.</span>';
 }
 async function quarantineIdx(i){
   const w=(window._shells||[])[i]; if(!w)return;

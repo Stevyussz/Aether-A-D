@@ -112,6 +112,28 @@ def test_traffic_capture_and_replay_endpoints(server):
     assert "error" in r
 
 
+def test_oast_listener_endpoints(server):
+    base, _key, _ = server
+    v = httpx.get(base + "/api/attack/oast").json()
+    assert "stats" in v and "interactions" in v
+    # control is a mutation -> token required.
+    assert httpx.post(base + "/api/attack/oast", json={"action": "start"}).status_code == 403
+    # minting before the listener is running is a clean error.
+    r0 = httpx.post(base + "/api/attack/oast", json={"action": "token"},
+                    headers={"X-AETHER-Token": TOKEN}).json()
+    assert "error" in r0
+    # start -> mint a callback URL that advertises our pub host -> stop.
+    s = httpx.post(base + "/api/attack/oast",
+                   json={"action": "start", "pub_host": "127.0.0.1"},
+                   headers={"X-AETHER-Token": TOKEN}).json()
+    assert s.get("ok") and s.get("running")
+    t = httpx.post(base + "/api/attack/oast", json={"action": "token"},
+                   headers={"X-AETHER-Token": TOKEN}).json()
+    assert t.get("token") and "127.0.0.1" in t.get("url", "")
+    httpx.post(base + "/api/attack/oast", json={"action": "stop"},
+               headers={"X-AETHER-Token": TOKEN})
+
+
 def test_sweep_is_scope_enforced(server):
     base, _key, _ = server
     r = httpx.post(base + "/api/attack/sweep", json={"host": "10.10.10.10", "port": 80},

@@ -46,6 +46,8 @@ class Backend:
         self.orch = None
         self.inbox = None
         self.defense = None
+        from ..attack.oast import OastListener
+        self.oast = OastListener()      # self-hosted OOB callback catcher (started on demand)
         self.sweeps = 0
         self.started = time.time()
         # Live attack panel state (updated from the sweep's progress callback).
@@ -88,6 +90,7 @@ class Backend:
         try:
             if self.defense is not None:
                 self.defense.shield.stop()
+            self.oast.stop()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -577,6 +580,32 @@ class Backend:
                 "unknown": report.submitted, "errors": report.errors,
                 "summary": report.summary()}
 
+    def oast_view(self, limit: int = 40) -> dict:
+        return {"stats": self.oast.stats(),
+                "interactions": self.oast.interactions(limit=limit, include_body=True)}
+
+    def oast_control(self, data: dict) -> dict:
+        """Start/stop the OOB listener, mint a callback URL, or clear interactions."""
+        action = (data.get("action") or "").lower()
+        if action == "start":
+            port = int(data.get("listen_port") or 0)
+            pub = (data.get("pub_host") or "").strip() or None
+            bound = self.oast.start(listen_host="0.0.0.0", listen_port=port, pub_host=pub)
+            return {"ok": True, "running": True, "listen_port": bound,
+                    "pub_host": self.oast.pub_host}
+        if action == "stop":
+            self.oast.stop()
+            return {"ok": True, "running": False}
+        if action == "clear":
+            self.oast.clear()
+            return {"ok": True}
+        if action == "token":
+            if not self.oast.running:
+                return {"error": "start the OAST listener first"}
+            tok = self.oast.new_token()
+            return {"ok": True, "token": tok, "url": self.oast.payload_url(tok)}
+        return {"error": f"unknown action {action!r}"}
+
     def config_apply(self, data: dict) -> dict:
         """Build config from the dashboard's structured form, then save it (fail-closed).
 
@@ -724,6 +753,8 @@ def _make_handler(backend: Backend, token: str):
                 elif path == "/api/defense/traffic":
                     _json(self, backend.traffic(
                         attacks_only=q.get("all", ["0"])[0] != "1"))
+                elif path == "/api/attack/oast":
+                    _json(self, backend.oast_view())
                 else:
                     _json(self, {"error": "not found"}, 404)
             except Exception as exc:  # noqa: BLE001
@@ -766,6 +797,8 @@ def _make_handler(backend: Backend, token: str):
                 elif path == "/api/attack/replay":
                     _json(self, backend.replay(payload.get("id"),
                                                payload.get("substitutions")))
+                elif path == "/api/attack/oast":
+                    _json(self, backend.oast_control(payload))
                 elif path == "/api/config/save":
                     _json(self, backend.config_save(payload.get("yaml", "")))
                 elif path == "/api/config/apply":
