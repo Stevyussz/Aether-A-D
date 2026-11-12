@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ..core.logger import get_logger
 from .request_filter import inspect_value, validate_params
+from .traffic_recorder import TrafficRecorder
 
 log = get_logger("shield_proxy")
 
@@ -64,6 +65,8 @@ class ShieldProxy:
         self.blocked_requests = 0
         self.forwarded_requests = 0
         self.recent_blocks: list[dict[str, str]] = []
+        # Tulip-style capture of every incoming request (enemy exploits land here).
+        self.recorder = TrafficRecorder()
 
     @property
     def running(self) -> bool:
@@ -159,19 +162,29 @@ class ShieldProxy:
                 body_text = raw_body.decode("utf-8", "replace") if raw_body else ""
                 hdrs = {k: v for k, v in self.headers.items()}
 
-                if proxy.enabled:
-                    reasons = proxy.inspect_request(self.path, body_text, hdrs)
-                    if reasons:
-                        proxy._record_block(self.command, self.path, reasons)
-                        payload = json.dumps(
-                            {"error": "request rejected by AETHER shield", "rules": reasons}
-                        ).encode("utf-8")
-                        self.send_response(403)
-                        self.send_header("Content-Type", "application/json")
-                        self.send_header("Content-Length", str(len(payload)))
-                        self.end_headers()
-                        self.wfile.write(payload)
-                        return
+                # Always inspect (even in pass-through) so enemy exploits are captured for
+                # replay; only BLOCK when filtering is enabled.
+                reasons = proxy.inspect_request(self.path, body_text, hdrs)
+                src_ip = self.client_address[0] if self.client_address else "?"
+                blocked = proxy.enabled and bool(reasons)
+                try:
+                    proxy.recorder.record(src_ip=src_ip, method=self.command, path=self.path,
+                                          headers=hdrs, body=body_text, blocked=blocked,
+                                          rule_hits=reasons)
+                except Exception:  # noqa: BLE001 - capture must never break the proxy
+                    pass
+
+                if blocked:
+                    proxy._record_block(self.command, self.path, reasons)
+                    payload = json.dumps(
+                        {"error": "request rejected by AETHER shield", "rules": reasons}
+                    ).encode("utf-8")
+                    self.send_response(403)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
 
                 proxy._record_forward()
                 try:

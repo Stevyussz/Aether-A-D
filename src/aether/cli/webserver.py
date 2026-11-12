@@ -170,8 +170,48 @@ class Backend:
                 "blocked_requests": self.defense.shield.blocked_requests,
                 "forwarded_requests": self.defense.shield.forwarded_requests,
                 "recent_blocks": list(self.defense.shield.recent_blocks),
+                "traffic": self.defense.shield.recorder.stats(),
             },
         }
+
+    def traffic(self, limit: int = 40, attacks_only: bool = True) -> dict:
+        if self.defense is None:
+            return {"captures": [], "stats": {"total": 0, "attacks": 0, "buffered": 0}}
+        rec = self.defense.shield.recorder
+        return {"captures": rec.recent(limit=limit, attacks_only=attacks_only),
+                "stats": rec.stats()}
+
+    def replay(self, cap_id: int, substitutions=None) -> dict:
+        return self._call(self._replay(cap_id, substitutions))
+
+    async def _replay(self, cap_id: int, substitutions=None) -> dict:
+        """Replay a captured enemy request against ALL authorized opponent targets (scope-
+        enforced). Any extracted flags land in the manual inbox PENDING."""
+        from ..attack.replay import ExploitReplayer
+        from ..attack.flags.extractor import FlagExtractor
+
+        if self.defense is None:
+            return {"error": "defense not started"}
+        cap = self.defense.shield.recorder.get(int(cap_id))
+        if cap is None:
+            return {"error": f"capture #{cap_id} not found"}
+        targets: list[tuple[str, int]] = []
+        for t in self.cfg.scope.targets:
+            if t.owner == "opponent":
+                for p in (t.ports or (80,)):
+                    targets.append((t.host, p))
+        if not targets:
+            return {"error": "no opponent targets in scope to replay against"}
+        subs = [(s.get("from", ""), s.get("to", "")) for s in (substitutions or [])
+                if s.get("from")]
+        replayer = ExploitReplayer(self.orch.scope, FlagExtractor(self.cfg.flags.pattern),
+                                   inbox=self.inbox)
+        report = await replayer.replay(cap, targets, substitutions=subs)
+        return {"ok": True, "summary": report.summary(),
+                "flags": len(report.flags_found), "sent": report.sent,
+                "results": [{"host": r.host, "port": r.port, "status": r.status,
+                             "flags": len(r.flags), "skipped": r.skipped, "error": r.error}
+                            for r in report.results]}
 
     def flags(self, show: bool) -> dict:
         return self._call(self._flags(show))
@@ -681,6 +721,9 @@ def _make_handler(backend: Backend, token: str):
                     _json(self, backend.flags(q.get("show", ["0"])[0] == "1"))
                 elif path == "/api/config":
                     _json(self, backend.config_view())
+                elif path == "/api/defense/traffic":
+                    _json(self, backend.traffic(
+                        attacks_only=q.get("all", ["0"])[0] != "1"))
                 else:
                     _json(self, {"error": "not found"}, 404)
             except Exception as exc:  # noqa: BLE001
@@ -720,6 +763,9 @@ def _make_handler(backend: Backend, token: str):
                                              payload.get("status", "SUBMITTED")))
                 elif path == "/api/flags/submit":
                     _json(self, backend.submit_flags(payload.get("limit")))
+                elif path == "/api/attack/replay":
+                    _json(self, backend.replay(payload.get("id"),
+                                               payload.get("substitutions")))
                 elif path == "/api/config/save":
                     _json(self, backend.config_save(payload.get("yaml", "")))
                 elif path == "/api/config/apply":

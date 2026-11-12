@@ -183,6 +183,19 @@ PAGE = r"""<!DOCTYPE html>
       </div>
     </div>
     <div style="height:14px"></div>
+    <div class="card">
+      <h3>traffic capture — exploit musuh (curi &amp; replay ala Tulip)</h3>
+      <p class="muted">Setiap request musuh yang masuk ke Shield kita direkam. Yang terdeteksi
+        sebagai serangan bisa <b>di-replay ke semua tim lawan</b> (scope-enforced) — curi exploit
+        mereka, balikin ke mereka. Flag hasil replay masuk inbox PENDING.</p>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost" onclick="loadTraffic()">Refresh capture</button>
+        <span class="muted" id="traf-stat"></span>
+      </div>
+      <div style="height:8px"></div>
+      <div id="traf-list"><span class="mut">Shield harus running untuk menangkap trafik.</span></div>
+    </div>
+    <div style="height:14px"></div>
     <div class="card"><h3>self-audit — sink yang bisa di-exploit lawan (patch SEBELUM kebobolan)</h3>
       <p class="muted">Cerminan arsenal attack ke dalam: LFI/cmdi/SSTI/SQLi/upload/file ke-expose
         di source service kita, lengkap dengan saran patch. Read-only.</p>
@@ -581,6 +594,26 @@ async function pollProgress(){
   if(p.status!=="running"){if(progTimer){clearInterval(progTimer);progTimer=null;}}
 }
 async function defenseSweep(){const r=await postJSON("/api/defense/sweep",{});$("#attackout").textContent=`defense sweep: ${r.incidents} incident(s)`;}
+async function loadTraffic(){
+  const r=await getJSON("/api/defense/traffic");
+  const st=r.stats||{};
+  $("#traf-stat").textContent=`total: ${st.total||0} · serangan: ${st.attacks||0} · buffer: ${st.buffered||0}`;
+  const caps=r.captures||[];
+  if(!caps.length){$("#traf-list").innerHTML='<span class="mut">belum ada serangan tertangkap.</span>';return;}
+  $("#traf-list").innerHTML=caps.map(c=>
+    `<div class="row" style="justify-content:space-between;border-bottom:1px solid var(--line);padding:5px 0">
+      <div style="min-width:0;overflow:hidden"><span class="mut">${esc(c.ts)}</span> <b>${esc(c.method)}</b>
+      <code>${esc((c.path||'').slice(0,90))}</code> <span class="mut">src ${esc(c.src_ip)}</span>
+      ${c.blocked?'<span class="down">BLOCKED</span>':''} <span class="mut">${esc((c.rule_hits||[]).join(','))}</span></div>
+      <button class="act" onclick="replayCapture(${c.id})">Replay ke musuh</button></div>`).join("");
+}
+async function replayCapture(id){
+  if(!confirm("Replay request musuh ini ke SEMUA target opponent di scope? (scope-enforced)"))return;
+  $("#traf-stat").textContent="replaying…";
+  const r=await postJSON("/api/attack/replay",{id});
+  $("#traf-stat").textContent = r.error?("⚠ "+r.error):(r.summary||"selesai");
+  loadFlags&&loadFlags();
+}
 async function quarantineIdx(i){
   const w=(window._shells||[])[i]; if(!w)return;
   if(!confirm("Quarantine (back up + move out of web root) "+w.path+" ?"))return;

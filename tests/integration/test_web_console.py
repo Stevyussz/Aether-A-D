@@ -99,6 +99,19 @@ def test_flag_submit_is_fail_closed(server):
     assert r2.status_code == 403
 
 
+def test_traffic_capture_and_replay_endpoints(server):
+    base, _key, _ = server
+    # Captured-traffic view is readable and well-formed (buffer starts empty).
+    t = httpx.get(base + "/api/defense/traffic").json()
+    assert "stats" in t and "captures" in t and isinstance(t["captures"], list)
+    # Replay is a mutation -> token required.
+    assert httpx.post(base + "/api/attack/replay", json={"id": 1}).status_code == 403
+    # Replaying a capture that does not exist is a clean error, never a crash.
+    r = httpx.post(base + "/api/attack/replay", json={"id": 999999},
+                   headers={"X-AETHER-Token": TOKEN}).json()
+    assert "error" in r
+
+
 def test_sweep_is_scope_enforced(server):
     base, _key, _ = server
     r = httpx.post(base + "/api/attack/sweep", json={"host": "10.10.10.10", "port": 80},
