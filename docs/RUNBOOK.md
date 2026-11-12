@@ -6,6 +6,9 @@ you add at the competition is the official scope/flag/timing in `config/aether.y
 > **New to Attack & Defense?** Read **[STRATEGY.md](STRATEGY.md)** first (roles, first 5
 > minutes, the per-tick loop, scoring, game-day checklist) and keep
 > **[CHEATSHEET.md](CHEATSHEET.md)** open (AETHER + manual commands).
+>
+> **Hari-H (Bahasa Indonesia):** checklist tempur langkah-demi-langkah ada di
+> **[RUNBOOK-HARI-H.md](RUNBOOK-HARI-H.md)** — scope → defense → attack → submit → capture/replay.
 
 ## 0. One-time setup (per machine)
 
