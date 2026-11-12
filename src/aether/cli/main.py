@@ -631,6 +631,9 @@ def attack_sweep(
     nuclei: bool = typer.Option(False, "--nuclei/--no-nuclei",
                                 help="Also run nuclei templated CVE checks (implies --tools; "
                                      "slower). Findings are surfaced as leads, not auto-exploited."),
+    sqlmap: bool = typer.Option(False, "--sqlmap/--no-sqlmap",
+                                help="Also run deep SQL injection with sqlmap (blind/time/error "
+                                     "+ table dump; slower). Flags land in the inbox as usual."),
     cred: list[str] = typer.Option(None, "--cred",
                                    help="Credential to try as user:pass (repeatable)."),
 ) -> None:
@@ -716,6 +719,8 @@ def attack_sweep(
                 extra["credentials"] = list(cred)
             if nuclei:
                 extra["tool_nuclei"] = True
+            if sqlmap:
+                extra["use_sqlmap"] = True
             use_tools = tools or nuclei
             kind_by_host = {t.host: t.kind for t in cfg.scope.targets}
             kind_by_hp = {(t.host, p): t.kind for t in cfg.scope.targets for p in t.ports}

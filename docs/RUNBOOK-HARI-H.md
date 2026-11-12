@@ -140,6 +140,10 @@ aether attack sweep <IP-musuh> --tools --show-values
 SQLi → command injection → SSTI → file upload → shellshock → XXE → sisanya. Arsenal jalan
 otomatis; `--tools` (ffuf/gobuster) penting buat nemu endpoint custom service lomba.
 
+**SQLi membandel** (modul UNION gak tembus): jalankan sqlmap mendalam on-demand ke SATU target
+(bukan tiap tick — lambat): `aether attack sweep <IP-musuh> --sqlmap --tools`. Blind/time/error
++ dump table otomatis; flag masuk inbox seperti biasa.
+
 **Service non-web** (set `kind:` di scope target):
 - `kind: ssh` → modul SSH coba **weak/default creds** (root:root, admin:admin, …) → baca flag +
   **enum privesc** (id, sudo -l, SUID). Punya cred dari panitia? isi `ssh_user`/`ssh_pass`.

@@ -206,6 +206,11 @@ class AttackSweep:
         progress: ProgressCb | None = None,
     ) -> SweepReport:
         plugins = plugins if plugins is not None else exploits_for(context.service)
+        # Opt-in deep SQLi (sqlmap) — appended only when requested so normal sweeps stay fast.
+        if context.extra.get("use_sqlmap") and (context.service or "web").lower() in _WEB_KINDS:
+            from .exploits.web_sqlmap import SqlmapExploit
+            if not any(p.identifier == "exploit.web.sqlmap" for p in plugins):
+                plugins = [*plugins, SqlmapExploit()]
         report = SweepReport(target=context.target_host or "unknown")
         _emit(progress, {"phase": "start", "target": report.target})
 

