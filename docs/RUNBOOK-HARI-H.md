@@ -140,6 +140,16 @@ aether attack sweep <IP-musuh> --tools --show-values
 SQLi → command injection → SSTI → file upload → shellshock → XXE → sisanya. Arsenal jalan
 otomatis; `--tools` (ffuf/gobuster) penting buat nemu endpoint custom service lomba.
 
+**Service non-web** (set `kind:` di scope target):
+- `kind: ssh` → modul SSH coba **weak/default creds** (root:root, admin:admin, …) → baca flag +
+  **enum privesc** (id, sudo -l, SUID). Punya cred dari panitia? isi `ssh_user`/`ssh_pass`.
+- `kind: redis` / `kind: memcached` → modul unauth.
+- custom TCP/`nc` (kind lain) → `tcp_vault` (HELP/LIST/GET/FLAG…) + **`custom_script`** buat
+  protokol/exploit bespoke (taruh di `scripts/custom/`).
+
+**Privilege escalation**: AETHER **enum** jalur privesc (SUID/sudo/cron/caps) & sajikan ke kamu —
+eskalasi akhir **manual** (biasanya flag A&D sudah kebaca user service, jarang perlu root).
+
 ---
 
 ## 4. "CURI EXPLOIT MUSUH" — capture → replay (senjata pamungkas)

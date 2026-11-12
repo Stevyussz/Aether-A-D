@@ -107,6 +107,9 @@ def exploits_for(kind: str | None) -> list[ExploitPlugin]:
         base = [RedisUnauthExploit()]
     elif k == "memcached":
         base = [MemcachedUnauthExploit()]
+    elif k == "ssh":
+        from .exploits.ssh_credentials import SshCredentialExploit
+        base = [SshCredentialExploit()]
     else:
         # custom TCP / unknown non-web service: try the whole network set.
         base = [cls() for cls in NETWORK_EXPLOITS]
