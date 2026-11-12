@@ -52,11 +52,35 @@ class ScoringConfig(BaseModel):
     flag_id_endpoint: str | None = None  # organizer endpoint publishing per-tick flag IDs
 
 
+class SubmissionConfig(BaseModel):
+    """Explicit, operator-opt-in channel for sending VALIDATED flags to the OFFICIAL
+    organizer game server. Separate from flags.auto_submit (which stays forbidden): this is
+    cooperation with the scoring server, not an attack, and is FAIL-CLOSED — nothing is sent
+    unless ``enabled=true`` AND a concrete endpoint/target is configured."""
+
+    enabled: bool = False
+    protocol: str = "http"            # "http" | "tcp"
+    endpoint: str | None = None       # http(s) URL (protocol=http)
+    http_method: str = "POST"
+    http_body: str = "json"           # "json" | "form" | "raw"
+    flag_field: str = "flag"
+    token: str | None = None
+    token_header: str | None = None   # e.g. "X-Team-Token"
+    tcp_host: str | None = None       # protocol=tcp
+    tcp_port: int | None = None
+    timeout: float = 10.0
+    accepted_patterns: list[str] | None = None
+    duplicate_patterns: list[str] | None = None
+    expired_patterns: list[str] | None = None
+    rejected_patterns: list[str] | None = None
+
+
 class AetherConfig(BaseModel):
     engine: EngineConfig = Field(default_factory=EngineConfig)
     scope: ScopeConfig = Field(default_factory=ScopeConfig)
     flags: FlagConfig = Field(default_factory=FlagConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
+    submission: SubmissionConfig = Field(default_factory=SubmissionConfig)
 
 
 class ConfigReadiness(BaseModel):
@@ -123,6 +147,18 @@ def assess_readiness(cfg: AetherConfig) -> ConfigReadiness:
 
     if cfg.scoring.tick_seconds is None:
         warnings.append("scoring.tick_seconds not set — polling cadence unknown")
+
+    if cfg.submission.enabled:
+        if cfg.submission.protocol == "http" and not cfg.submission.endpoint:
+            issues.append("submission.enabled=true but submission.endpoint is not set (fail closed)")
+        elif cfg.submission.protocol == "tcp" and not (
+                cfg.submission.tcp_host and cfg.submission.tcp_port):
+            issues.append("submission.enabled=true but submission.tcp_host/tcp_port not set (fail closed)")
+        elif cfg.submission.protocol not in ("http", "tcp"):
+            issues.append(f"submission.protocol invalid: {cfg.submission.protocol!r} (use http|tcp)")
+        else:
+            warnings.append("submission.enabled=true — VALIDATED flags will be SENT to the "
+                            "configured organizer endpoint (ensure it is the official game server)")
 
     if not cfg.scope.enforce:
         warnings.append("scope.enforce=false — LAB MODE ONLY, never use in competition")

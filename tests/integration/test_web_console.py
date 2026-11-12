@@ -88,6 +88,17 @@ def test_mutations_require_token(server):
     assert r2.status_code == 200 and r2.json().get("ok") is True
 
 
+def test_flag_submit_is_fail_closed(server):
+    base, _key, _ = server
+    # submission.enabled defaults to false -> the organizer submit endpoint refuses, sends nothing.
+    r = httpx.post(base + "/api/flags/submit", json={},
+                   headers={"X-AETHER-Token": TOKEN}).json()
+    assert "error" in r and "submission" in r["error"].lower()
+    # token is still required for this mutation.
+    r2 = httpx.post(base + "/api/flags/submit", json={})
+    assert r2.status_code == 403
+
+
 def test_sweep_is_scope_enforced(server):
     base, _key, _ = server
     r = httpx.post(base + "/api/attack/sweep", json={"host": "10.10.10.10", "port": 80},

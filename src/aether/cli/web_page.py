@@ -217,6 +217,17 @@ PAGE = r"""<!DOCTYPE html>
       <div style="height:8px"></div>
       <div id="flagtable"></div>
     </div>
+    <div class="card">
+      <h3>submit ke panitia (organizer)</h3>
+      <p class="muted">Kirim semua flag <b>VALIDATED</b> yang masih PENDING ke official game
+        server (dari config <code>submission.*</code>). <b>Fail-closed</b>: tidak jalan kalau
+        <code>submission.enabled=false</code> atau endpoint kosong. Tiap flag ditandai agar tidak
+        terkirim dua kali. Ini satu-satunya jalur kirim otomatis, dan hanya ke endpoint panitia.</p>
+      <div class="row">
+        <button class="act" onclick="submitFlags()">Submit flag VALIDATED ke panitia</button>
+        <span id="submitout" class="muted"></span>
+      </div>
+    </div>
   </section>
 
   <section id="config" class="hide">
@@ -589,6 +600,13 @@ async function loadFlags(){
       <button class="ghost" onclick="mark('${f.key}','ACCEPTED')">accepted</button></td></tr>`).join("")+`</table>`:'<span class="mut">no flags yet — run a sweep from the Attack tab</span>';
 }
 async function mark(key,status){await postJSON("/api/flags/mark",{key,status});loadFlags();}
+async function submitFlags(){
+  if(!confirm("Kirim semua flag VALIDATED (PENDING) ke endpoint panitia yang di-set di config submission.*?"))return;
+  const out=document.getElementById("submitout"); out.textContent="mengirim…";
+  const r=await postJSON("/api/flags/submit",{});
+  out.textContent = r.error ? ("⚠ "+r.error) : (r.summary||"selesai");
+  loadFlags();
+}
 
 const KINDS=["web","redis","memcached","tcp","vault","note","linux"];
 const OWNERS=["opponent","self"];

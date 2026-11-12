@@ -518,6 +518,25 @@ class Backend:
         ok = await self.inbox.mark_submitted(key, st)
         return {"ok": bool(ok)}
 
+    def submit_flags(self, limit=None) -> dict:
+        return self._call(self._submit_flags(limit))
+
+    async def _submit_flags(self, limit=None) -> dict:
+        """Submit VALIDATED+PENDING flags to the official organizer (fail-closed via config)."""
+        from ..scoring.submitter import FlagSubmitter, submit_config_from
+
+        scfg = submit_config_from(self.cfg.submission)
+        ok, reason = scfg.ready()
+        if not ok:
+            return {"error": f"submission not armed: {reason}"}
+        report = await FlagSubmitter(self.inbox, scfg).submit_pending(limit=limit)
+        if report.refused:
+            return {"error": report.refused}
+        return {"ok": True, "attempted": report.attempted, "accepted": report.accepted,
+                "rejected": report.rejected, "expired": report.expired,
+                "unknown": report.submitted, "errors": report.errors,
+                "summary": report.summary()}
+
     def config_apply(self, data: dict) -> dict:
         """Build config from the dashboard's structured form, then save it (fail-closed).
 
@@ -699,6 +718,8 @@ def _make_handler(backend: Backend, token: str):
                 elif path == "/api/flags/mark":
                     _json(self, backend.mark(payload.get("key", ""),
                                              payload.get("status", "SUBMITTED")))
+                elif path == "/api/flags/submit":
+                    _json(self, backend.submit_flags(payload.get("limit")))
                 elif path == "/api/config/save":
                     _json(self, backend.config_save(payload.get("yaml", "")))
                 elif path == "/api/config/apply":

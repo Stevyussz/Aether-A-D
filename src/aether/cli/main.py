@@ -1182,6 +1182,61 @@ def flags_mark_submitted(
     asyncio.run(_run())
 
 
+@flags_app.command("submit")
+def flags_submit(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    limit: int = typer.Option(None, "--limit", help="Max flags to submit this run."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Submit VALIDATED+PENDING flags to the OFFICIAL organizer endpoint (submission.* config).
+
+    Fail-closed: does nothing unless submission.enabled=true and an endpoint is configured.
+    This is the ONLY automated submission path; it sends only to the configured game server,
+    never to a scope target, and marks each flag so it is never submitted twice.
+    """
+    import asyncio
+
+    from ..scoring.submitter import FlagSubmitter, submit_config_from
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    scfg = submit_config_from(cfg.submission)
+    ok, reason = scfg.ready()
+    if not ok:
+        err_console.print(f"[yellow]⚠ submission not armed:[/] {reason}")
+        err_console.print("  Set submission.enabled=true and the endpoint in your config first.")
+        raise typer.Exit(1)
+
+    dest = scfg.endpoint if scfg.protocol == "http" else f"{scfg.tcp_host}:{scfg.tcp_port}"
+    if not yes:
+        confirm = typer.confirm(
+            f"Submit VALIDATED flags to organizer [{scfg.protocol}] {dest}?", default=False)
+        if not confirm:
+            console.print("[dim]aborted — nothing submitted[/]")
+            raise typer.Exit(0)
+
+    async def _run():
+        state, inbox = _open_state_and_inbox(cfg)
+        await state.open()
+        try:
+            report = await FlagSubmitter(inbox, scfg).submit_pending(limit=limit)
+            if report.refused:
+                err_console.print(f"[red]✗ refused: {report.refused}[/]")
+                raise typer.Exit(1)
+            console.print(f"[green]✓ {report.summary()}[/]")
+            if report.errors:
+                err_console.print(f"[yellow]  {len(report.errors)} error(s):[/] "
+                                  + "; ".join(report.errors[:5]))
+        finally:
+            await state.close()
+
+    asyncio.run(_run())
+
+
 @scoring_app.command("show")
 def scoring_show(
     config: str = typer.Option(None, "--config", "-c", help="Config path."),

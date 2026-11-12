@@ -43,5 +43,31 @@ scoring:
   epoch: null               # unix timestamp of tick 0 start, if known
   expiry_ticks: null        # flag validity window in ticks, if known
   flag_id_endpoint: null    # URL or local file path publishing per-tick flag_ids (if provided)
-  submit_endpoint: null     # operator submits manually; this is informational only
+  submit_endpoint: null     # informational mirror of submission.endpoint below
   scoreboard_endpoint: null
+
+# Official flag SUBMISSION to the organizer game server (the one real A&D channel that sends
+# flags out). FAIL-CLOSED: enabled=false by default — AETHER sends nothing until you set this
+# with the briefing's real protocol. This is NOT an attack and never uses scope; it only talks
+# to the official submission endpoint. Flags are only sent if VALIDATED, and each is marked so
+# it is never submitted twice. Run it with:  aether flags submit   (or the dashboard button).
+submission:
+  enabled: false            # set true ONLY with the official endpoint below filled in
+  protocol: http            # "http" (one request per flag) | "tcp" (send "<flag>\n", read reply)
+  # --- http protocol ---
+  endpoint: null            # e.g. http://10.10.0.1/api/submit  (official game server URL)
+  http_method: POST
+  http_body: json           # "json" {flag_field: "<flag>"} | "form" | "raw" (flag as body)
+  flag_field: flag          # body field name carrying the flag
+  token: null               # team/submission token, if the organizer requires one
+  token_header: null        # header to carry the token, e.g. X-Team-Token
+  # --- tcp protocol (classic line submitter) ---
+  tcp_host: null            # e.g. 10.10.0.1
+  tcp_port: null            # e.g. 31337
+  timeout: 10.0
+  # Response classification (case-insensitive substrings). Leave null to use sane defaults;
+  # override once you see the real game-server replies.
+  accepted_patterns: null   # e.g. ["accepted", "correct"]
+  duplicate_patterns: null  # e.g. ["already", "duplicate"]  (treated as accepted/done)
+  expired_patterns: null    # e.g. ["expired", "too old"]
+  rejected_patterns: null   # e.g. ["invalid", "wrong"]
