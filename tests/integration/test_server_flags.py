@@ -40,9 +40,13 @@ def test_literal_prefix_derives_grep_token():
 
 
 def test_payloads_hunt_the_server_filesystem():
-    # With the prefix known, the FIRST command greps the bounded roots for the flag.
+    # With the prefix known, the FIRST command both cats the conventional root-level flag files
+    # (e.g. /flag.txt — NOT under the recursive roots) AND greps the bounded roots, so a single
+    # one-shot RCE (SSTI/upload/shellshock) never misses either placement.
     cmds = read_commands("IONIC{")
-    assert cmds[0].startswith("grep -rsho") and "IONIC" in cmds[0]
+    assert cmds[0].startswith("cat ") and "/flag.txt" in cmds[0]
+    assert "grep -rsho" in cmds[0] and "IONIC" in cmds[0]
+    assert '"' not in cmds[0]                                        # stays double-quote safe
     assert any("/root" in c and "root.txt" in c for c in cmds)       # conventional file
     assert any("user.txt" in c for c in cmds)                        # home flag
     # Shell payloads wrap the grep through real separators, and still cat known files.
