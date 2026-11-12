@@ -91,12 +91,14 @@ class WebCrawlModule(Module):
                     if path in seen:
                         continue
                     seen.add(path)
+                    if not path.startswith("/"):
+                        path = "/" + path
                     endpoints.add(path.split("?", 1)[0] or "/")
                     for k in parse_qs(urlparse(path).query):
                         params.add(k)
                     try:
                         resp = await client.get(base + path)
-                    except httpx.HTTPError:
+                    except (httpx.HTTPError, httpx.InvalidURL, ValueError, UnicodeError):
                         continue
                     ctype = resp.headers.get("content-type", "")
                     if "html" not in ctype and "xml" not in ctype:
@@ -118,17 +120,35 @@ class WebCrawlModule(Module):
                     if depth >= max_depth:
                         continue
                     for link in parser.links:
+                        # Skip non-navigable schemes (data:/javascript:/mailto:/tel:/blob:) —
+                        # e.g. a phpinfo page's data: logo would otherwise queue a pathless
+                        # "image/..." that fuses into the authority and breaks URL parsing.
+                        low = link.strip().lower()
+                        if low.split(":", 1)[0] in ("data", "javascript", "mailto", "tel",
+                                                    "blob", "about", "file") and ":" in low:
+                            continue
                         absu = urljoin(base + path, link)
                         pu = urlparse(absu)
+                        if pu.scheme and pu.scheme not in ("http", "https"):
+                            continue
                         if pu.netloc and pu.netloc != urlparse(base).netloc:
                             continue  # same-host only
                         np = pu.path or "/"
+                        if not np.startswith("/"):
+                            np = "/" + np   # never let a path fuse into host:port
                         for k in parse_qs(pu.query):
                             params.add(k)
                         npq = np + (("?" + pu.query) if pu.query else "")
                         if np not in {s.split("?", 1)[0] for s in seen}:
                             queue.append((npq, depth + 1))
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, UnicodeError) as exc:
+            # Return what we crawled so far rather than failing recon outright.
+            if endpoints:
+                return ModuleResult(
+                    module=self.identifier, target=host, state=TaskState.SUCCEEDED,
+                    detail=f"crawled {len(seen)} page(s) (stopped early: {type(exc).__name__})",
+                    data={"endpoints": sorted(endpoints), "params": sorted(params),
+                          "forms": forms})
             return ModuleResult(module=self.identifier, target=host, state=TaskState.FAILED,
                                 detail=f"crawl error: {type(exc).__name__}: {exc}")
 
