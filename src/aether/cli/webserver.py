@@ -540,11 +540,16 @@ class Backend:
             bport = int(payload.get("backend_port", 8000) or 8000)
             if "enabled" in payload and payload["enabled"] is not None:
                 sh.set_enabled(bool(payload["enabled"]))
+            if payload.get("allow_ips") is not None or payload.get("allow_paths") is not None:
+                sh.set_allowlist(ips=payload.get("allow_ips"), paths=payload.get("allow_paths"))
             bound = sh.start(lhost, lport, bhost, bport)
             return {"ok": True, "running": sh.running, "enabled": sh.enabled, "listen_port": bound}
         if action == "stop":
             sh.stop()
             return {"ok": True, "running": sh.running, "enabled": sh.enabled}
+        if action == "allowlist":
+            al = sh.set_allowlist(ips=payload.get("allow_ips"), paths=payload.get("allow_paths"))
+            return {"ok": True, "allowlist": al}
         # Default: toggle or set enabled ON/OFF
         new_state = (not sh.enabled) if payload.get("enabled") is None else bool(payload["enabled"])
         sh.set_enabled(new_state)

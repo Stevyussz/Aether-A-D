@@ -38,6 +38,9 @@ class ShieldStats:
     total_requests: int = 0
     blocked_requests: int = 0
     forwarded_requests: int = 0
+    allowlisted_requests: int = 0
+    allow_ips: list[str] = field(default_factory=list)
+    allow_paths: list[str] = field(default_factory=list)
     recent_blocks: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -52,21 +55,46 @@ class ShieldProxy:
         backend_port: int = 8000,
         *,
         enabled: bool = True,
+        allow_ips: tuple[str, ...] = (),
+        allow_paths: tuple[str, ...] = (),
     ) -> None:
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.backend_host = backend_host
         self.backend_port = backend_port
         self.enabled = enabled
+        # SLA SAFETY: requests from these source IPs, or to these path prefixes, are NEVER
+        # blocked — they are forwarded straight to the backend so the organizer's SLA checker
+        # can never be filtered out (a false block = a failed SLA tick = lost points). They are
+        # still recorded so you can see what the checker sends.
+        self.allow_ips: set[str] = set(allow_ips)
+        self.allow_paths: list[str] = list(allow_paths)
         self._lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self.total_requests = 0
         self.blocked_requests = 0
         self.forwarded_requests = 0
+        self.allowlisted_requests = 0
         self.recent_blocks: list[dict[str, str]] = []
         # Tulip-style capture of every incoming request (enemy exploits land here).
         self.recorder = TrafficRecorder()
+
+    def set_allowlist(self, *, ips=None, paths=None) -> dict:
+        """Update the SLA-safe allowlist at runtime. Returns the current allowlist."""
+        with self._lock:
+            if ips is not None:
+                self.allow_ips = set(ips)
+            if paths is not None:
+                self.allow_paths = list(paths)
+            return {"ips": sorted(self.allow_ips), "paths": list(self.allow_paths)}
+
+    def is_allowlisted(self, src_ip: str, raw_path: str) -> bool:
+        """True if this request bypasses filtering (SLA checker / known-good path)."""
+        if src_ip and src_ip in self.allow_ips:
+            return True
+        path = (raw_path or "").split("?", 1)[0]
+        return any(path == p or path.startswith(p) for p in self.allow_paths if p)
 
     @property
     def running(self) -> bool:
@@ -166,7 +194,13 @@ class ShieldProxy:
                 # replay; only BLOCK when filtering is enabled.
                 reasons = proxy.inspect_request(self.path, body_text, hdrs)
                 src_ip = self.client_address[0] if self.client_address else "?"
-                blocked = proxy.enabled and bool(reasons)
+                # SLA-safe: allowlisted source IPs / paths (e.g. the organizer SLA checker) are
+                # NEVER blocked, even if a rule matches — a false block costs an SLA tick.
+                allowlisted = proxy.is_allowlisted(src_ip, self.path)
+                blocked = proxy.enabled and bool(reasons) and not allowlisted
+                if allowlisted:
+                    with proxy._lock:
+                        proxy.allowlisted_requests += 1
                 try:
                     proxy.recorder.record(src_ip=src_ip, method=self.command, path=self.path,
                                           headers=hdrs, body=body_text, blocked=blocked,
@@ -276,5 +310,8 @@ class ShieldProxy:
                 total_requests=self.total_requests,
                 blocked_requests=self.blocked_requests,
                 forwarded_requests=self.forwarded_requests,
+                allowlisted_requests=self.allowlisted_requests,
+                allow_ips=sorted(self.allow_ips),
+                allow_paths=list(self.allow_paths),
                 recent_blocks=list(self.recent_blocks),
             )

@@ -10,20 +10,59 @@ panitia ke `config/aether.yaml`.
 
 ---
 
-## 0. SEBELUM berangkat (H-1, di rumah — WAJIB, karena arena bisa tanpa internet)
+## 0. SETUP DARI NOL → SIAP TEMPUR (lakukan di KEDUA laptop, kamu + timmu, H-1)
+
+Internet di arena bisa diputus panitia, jadi **semua ini WAJIB beres di rumah.**
+
+### 0a. Prasyarat (sekali per laptop)
 
 ```bash
-uv tool install --editable .          # perintah global `aether`
-aether system health                  # semua hijau, "No-AI runtime: clean"
-aether lab serve &                    # self-test: pastikan arsenal jalan
-nuclei -update-templates              # cache templates nuclei LOKAL (biar offline)
-docker --version && rustscan --version && ffuf -V && nuclei -version   # tools siap
+# 1) Git + Docker (lab latihan) + qemu (opsional, image multi-arch)
+sudo apt update && sudo apt install -y git docker.io docker-compose-plugin
+sudo usermod -aG docker $USER      # lalu logout/login sekali biar `docker` tanpa sudo
+
+# 2) uv (Python toolchain — installer resmi)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+#   buka terminal baru supaya `uv` ada di PATH
+
+# 3) Tools pentest eksternal (AETHER mengintegrasikannya)
+sudo apt install -y nmap gobuster whatweb        # dasar
+#   rustscan / ffuf / nuclei (kalau belum ada):
+cargo install rustscan 2>/dev/null || sudo apt install -y rustscan
+go install github.com/ffuf/ffuf/v2@latest 2>/dev/null || sudo apt install -y ffuf
+go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest 2>/dev/null || sudo apt install -y nuclei
 ```
 
-- [ ] `aether` jalan tanpa error, `system health` hijau.
+### 0b. Pasang AETHER (dari repo)
+
+```bash
+git clone https://github.com/Stevyussz/Aether-A-D.git
+cd Aether-A-D
+uv venv --python 3.12 .venv
+uv pip install -e ".[dev]" --python .venv/bin/python
+uv tool install --editable .          # perintah global `aether` (tanpa prefix .venv/bin)
+```
+
+### 0c. Verifikasi + cache offline (WAJIB)
+
+```bash
+aether system health                  # semua hijau, "No-AI runtime: clean"
+.venv/bin/pytest -q                   # semua test lulus = arsenal sehat
+aether lab serve &                    # self-test lab: pastikan ambil flag jalan
+nuclei -update-templates              # cache templates nuclei LOKAL (biar offline)
+docker pull vulhub/flask:1.1.1        # (opsional) image lab latihan, biar offline
+```
+
+### Checklist "siap tempur" (centang di kedua laptop)
+- [ ] `aether` jalan tanpa error, `aether system health` hijau.
+- [ ] `pytest` hijau (arsenal + defense teruji).
 - [ ] Tools eksternal ada: `nmap`, `rustscan`, `ffuf`/`gobuster`, `whatweb`, `nuclei`.
-- [ ] nuclei templates sudah ke-cache (`~/nuclei-templates`).
-- [ ] Repo ke-clone di **kedua** laptop (kamu + timmu).
+- [ ] nuclei templates sudah ke-cache (`~/nuclei-templates` ada isinya).
+- [ ] `docker ps` jalan tanpa sudo.
+- [ ] Repo ke-clone & AETHER terpasang di **kedua** laptop (kamu + timmu).
+- [ ] Sudah coba `aether web` → dashboard kebuka di browser.
+
+> **Update dari repo** (kalau ada perubahan): `git pull && uv tool install --editable . --force`
 
 ---
 
@@ -68,7 +107,8 @@ aether defense audit --path /path/ke/webroot-kita
 ```bash
 # 2) WAF di depan service kita: pindah service asli ke port lokal (mis. 9000),
 #    ShieldProxy dengar di port publik. Blokir SQLi/LFI/cmdi/SSTI + rekam exploit musuh.
-aether defense shield --listen 80 --backend 9000
+#    --allow-ip = IP SLA-checker juri JANGAN pernah diblok (biar MENANG SLA!).
+aether defense shield --listen 80 --backend 9000 --allow-ip <IP-checker-juri> --allow-path /healthz
 
 # 3) AutoGuard: auto-karantina webshell + auto-restore file yang diubah musuh,
 #    lindungi file flag yang di-update juri. --interval 5 = loop tiap 5 detik.
@@ -149,7 +189,8 @@ aether attack oast --pub-host <IP-tim-kita>    # listener callback self-hosted
 |---|---|
 | Service kita DOWN (SLA merah) setelah patch | `aether defense guard` auto-restore, atau rollback git lokal manual |
 | Ragu kebobolan / ada webshell | tab Defense → scan webshells → **quarantine**; AutoGuard auto |
-| Shield blokir SLA checker (false positive) | Filter Switch → **OFF (pass-through)** sementara, tetap merekam |
+| Shield blokir SLA checker (false positive) | Tambah IP checker ke **allowlist** (`--allow-ip` / tombol "Set allowlist") — permanen & tetap blokir musuh. Darurat: Filter Switch → **OFF** sementara (tetap merekam) |
+| SLA turun walau service normal | Pastikan IP SLA-checker ada di shield allowlist; cek counter `allowlisted` di dashboard naik tiap tick |
 | Sweep "already running" | tunggu selesai (1 sweep sekaligus), atau `aether attack stop` |
 | Flag ke-reject panitia | cek flag_id/tick benar; flag mungkin sudah expired ronde lalu |
 | Internet mati | semua tetap jalan (tools + nuclei templates sudah lokal) |

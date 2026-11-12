@@ -195,10 +195,18 @@ PAGE = r"""<!DOCTYPE html>
           <button class="act" id="btn-sh-run" onclick="startShield()">Start Proxy</button>
           <button class="ghost" id="btn-sh-stop" onclick="stopShield()">Stop</button>
         </div>
+        <div class="row" style="margin-top:6px">
+          <label class="muted">SLA allow IP (checker juri, pisah koma)
+            <input id="sh-allow-ip" type="text" placeholder="10.60.0.1" style="width:150px" class="builder-in"></label>
+          <label class="muted">allow path <input id="sh-allow-path" type="text" placeholder="/healthz,/sla" style="width:140px" class="builder-in"></label>
+          <button class="ghost" onclick="applyAllowlist()">Set allowlist</button>
+        </div>
         <div class="row" style="margin-top:8px">
           <button class="act" id="btn-sh-toggle" onclick="toggleShieldFilter()">Filter Switch: ON (BLOCKING)</button>
           <span class="muted" id="sh-stat">proxy: stopped</span>
         </div>
+        <p class="muted" style="margin-top:4px">SLA-safe: IP/path di allowlist tidak akan pernah
+          diblok → service tetap lolos cek juri walau filter ON.</p>
       </div>
     </div>
     <div style="height:14px"></div>
@@ -498,12 +506,19 @@ async function runGuardNow(){
   $("#defout").textContent=`AutoGuard pass selesai: quarantined=${(r.files_quarantined||[]).length}, restored=${(r.files_restored||[]).length}`;
   tick();
 }
+function _csv(id){return ($("#"+id).value||"").split(",").map(s=>s.trim()).filter(Boolean);}
 async function startShield(){
   const lp=parseInt($("#sh-listen").value||"8080",10);
   const bp=parseInt($("#sh-backend").value||"8000",10);
-  const r=await postJSON("/api/defense/shield",{action:"start",listen_port:lp,backend_port:bp});
+  const r=await postJSON("/api/defense/shield",{action:"start",listen_port:lp,backend_port:bp,
+    allow_ips:_csv("sh-allow-ip"),allow_paths:_csv("sh-allow-path")});
   $("#defout").textContent=r.error?("✗ "+r.error):`Shield proxy aktif di port ${r.listen_port} → backend ${bp}`;
   tick();
+}
+async function applyAllowlist(){
+  const r=await postJSON("/api/defense/shield",{action:"allowlist",
+    allow_ips:_csv("sh-allow-ip"),allow_paths:_csv("sh-allow-path")});
+  $("#defout").textContent=r.error?("✗ "+r.error):("SLA allowlist di-set: "+JSON.stringify(r.allowlist));
 }
 async function stopShield(){
   await postJSON("/api/defense/shield",{action:"stop"});

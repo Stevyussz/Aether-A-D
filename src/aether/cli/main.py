@@ -538,6 +538,10 @@ def defense_shield(
     listen_host: str = typer.Option("0.0.0.0", "--host", help="Bind address for shield proxy."),
     backend_host: str = typer.Option("127.0.0.1", "--backend-host", help="Backend host."),
     off: bool = typer.Option(False, "--off", help="Start in pass-through mode (filtering OFF)."),
+    allow_ip: list[str] = typer.Option(None, "--allow-ip",
+        help="SLA-safe: source IP(s) never blocked (e.g. the organizer's SLA checker). Repeatable."),
+    allow_path: list[str] = typer.Option(None, "--allow-path",
+        help="SLA-safe: path prefix(es) never blocked (e.g. /healthz, /sla). Repeatable."),
 ) -> None:
     """Start the HTTP Shield reverse-proxy in front of a self-owned web service."""
     import time
@@ -550,6 +554,8 @@ def defense_shield(
         backend_host=backend_host,
         backend_port=backend_port,
         enabled=(not off),
+        allow_ips=tuple(allow_ip or ()),
+        allow_paths=tuple(allow_path or ()),
     )
     bound = proxy.start()
     mode_str = "[green]ON (BLOCKING)[/]" if proxy.enabled else "[yellow]OFF (PASS-THROUGH)[/]"
@@ -557,6 +563,8 @@ def defense_shield(
         f"[bold cyan]AETHER HTTP Shield Proxy[/] listening on [bold]{listen_host}:{bound}[/] "
         f"→ forwarding to [bold]{backend_host}:{backend_port}[/] • Filter: {mode_str}"
     )
+    if allow_ip or allow_path:
+        console.print(f"[dim]SLA allowlist — ips={list(allow_ip or [])} paths={list(allow_path or [])}[/]")
     console.print("[dim]Press Ctrl-C to stop[/]")
     try:
         while True:
