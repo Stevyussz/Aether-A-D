@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lab" / "web"))
 from vuln_service import ALL_VULNS, VulnLabService  # noqa: E402
 
 from aether.attack.engine import AttackEngine  # noqa: E402
+from aether.attack.exploits.web_ad_community import AdCommunityVulnboxExploit  # noqa: E402
 from aether.attack.exploits.web_command_injection import CommandInjectionExploit  # noqa: E402
 from aether.attack.exploits.web_default_creds import DefaultCredsExploit  # noqa: E402
 from aether.attack.exploits.web_deserialization import DeserializationExploit  # noqa: E402
@@ -28,6 +29,7 @@ from aether.attack.exploits.web_nosqli import NoSqlInjectionExploit  # noqa: E40
 from aether.attack.exploits.web_path_traversal import PathTraversalExploit  # noqa: E402
 from aether.attack.exploits.web_sqli import SqlInjectionExploit  # noqa: E402
 from aether.attack.exploits.web_ssrf import SsrfExploit  # noqa: E402
+from aether.attack.exploits.web_shellshock import ShellshockExploit  # noqa: E402
 from aether.attack.exploits.web_ssti import SstiExploit  # noqa: E402
 from aether.attack.exploits.web_xxe import XxeExploit  # noqa: E402
 from aether.attack.flags.inbox import FlagInbox  # noqa: E402
@@ -45,9 +47,10 @@ PATTERN = r"IONIC\{[^}]+\}"
 
 MODULES = [
     ExposedFilesExploit, PathTraversalExploit, SqlInjectionExploit, CommandInjectionExploit,
-    SstiExploit, FileUploadExploit, NoSqlInjectionExploit, DefaultCredsExploit, IdorExploit,
-    SsrfExploit, XxeExploit, GraphqlExploit, ElasticsearchExploit, JwtWeaknessExploit,
-    DeserializationExploit,
+    SstiExploit, FileUploadExploit, ShellshockExploit, NoSqlInjectionExploit,
+    DefaultCredsExploit, IdorExploit, SsrfExploit, XxeExploit, GraphqlExploit,
+    ElasticsearchExploit, JwtWeaknessExploit, DeserializationExploit,
+    AdCommunityVulnboxExploit,
 ]
 
 # New modules proven in ISOLATION (only their own vuln enabled) so no overlapping branch
@@ -57,6 +60,8 @@ ISOLATED = {
     JwtWeaknessExploit: frozenset({"jwt"}),
     DeserializationExploit: frozenset({"deserialization"}),
     FileUploadExploit: frozenset({"file_upload"}),
+    ShellshockExploit: frozenset({"shellshock"}),
+    AdCommunityVulnboxExploit: frozenset({"ad_community"}),
 }
 
 
@@ -123,7 +128,8 @@ async def test_full_sweep_finds_flag_and_dedups(tmp_path):
         try:
             sweep = AttackSweep(engine)
             report = await sweep.run(
-                RunContext(target_host="127.0.0.1", target_port=svc.port, service="web")
+                RunContext(target_host="127.0.0.1", target_port=svc.port, service="web",
+                           extra={"max_probes": 25})
             )
             assert report.any_flag
             assert FLAG in report.flags_found
@@ -146,7 +152,8 @@ async def test_no_fabrication_against_clean_service(tmp_path):
         orch, inbox, engine = await _make_engine(tmp_path, svc.port)
         try:
             report = await AttackSweep(engine).run(
-                RunContext(target_host="127.0.0.1", target_port=svc.port, service="web")
+                RunContext(target_host="127.0.0.1", target_port=svc.port, service="web",
+                           extra={"max_probes": 25})
             )
             assert not report.any_flag
             assert await inbox.list() == []

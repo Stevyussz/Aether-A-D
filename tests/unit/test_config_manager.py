@@ -80,3 +80,25 @@ def test_lab_mode_warns(tmp_path):
     cfg = load_config(_write(tmp_path, "scope:\n  enforce: false\n"))
     r = assess_readiness(cfg)
     assert any("LAB MODE" in w for w in r.warnings)
+
+
+def test_readiness_detects_invalid_regex_and_placeholder_substrings(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
+            scope:
+              enforce: true
+              targets:
+                - name: opponent-web-PLACEHOLDER
+                  host: 10.60.OURTEAM.1
+                  ports: [80]
+            flags:
+              pattern: "IONIC\\\\{[unclosed"
+            """,
+        )
+    )
+    r = assess_readiness(cfg)
+    assert not r.ready
+    assert any("placeholder" in i for i in r.issues)
+    assert any("not a valid regex" in i for i in r.issues)

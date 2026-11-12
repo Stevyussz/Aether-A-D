@@ -110,7 +110,9 @@ def test_config_apply_form_sets_scope(server):
     base, _key, cfg_path = server
     # The dashboard scope-builder form posts structured targets; they get written + armed.
     r = httpx.post(base + "/api/config/apply", headers={"X-AETHER-Token": TOKEN}, json={
-        "pattern": r"IONIC\{[^}]+\}", "tick": "60", "enforce": True,
+        "pattern": r"IONIC\{[^}]+\}", "tick": "60",
+        "flag_id_endpoint": "http://10.60.0.1/flag_ids.json",
+        "enforce": True,
         "targets": [
             {"name": "enemy1", "host": "10.1.2.3", "ports": "80,8080", "kind": "web",
              "owner": "opponent", "notes": ""},
@@ -122,7 +124,15 @@ def test_config_apply_form_sets_scope(server):
     hosts = {t["host"] for t in cfg["targets"]}
     assert "10.1.2.3" in hosts and "127.0.0.1" in hosts
     assert cfg["tick"] == 60
+    assert cfg["flag_id_endpoint"] == "http://10.60.0.1/flag_ids.json"
+    ours_row = next(t for t in cfg["targets"] if t["name"] == "ours")
+    assert ours_row["notes"] == "/var/www/html"
     assert "enemy1" in cfg_path.read_text()          # persisted to disk
+    # Live engine scope is hot-reloaded without requiring a server restart:
+    # 99.99.99.99 is still out-of-scope, while 10.1.2.3:80 is now authorized in live scope.
+    r_out = httpx.post(base + "/api/attack/sweep", json={"host": "99.99.99.99", "port": 80},
+                       headers={"X-AETHER-Token": TOKEN}).json()
+    assert "error" in r_out and "scope" in r_out["error"].lower()
 
 
 def test_config_apply_is_fail_closed(server):

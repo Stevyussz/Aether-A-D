@@ -53,6 +53,8 @@ class Backend:
         self._attack_future = None
         self.rounds = 0
         self.attack: dict = {"status": "idle", "log": []}
+        self.attack_loop_enabled: bool = False
+        self._last_auto_sweep: float = 0.0
 
     # --- lifecycle --------------------------------------------------------------------
     def start(self) -> None:
@@ -83,6 +85,11 @@ class Backend:
                 self.defense.watch_path(t.name, notes)
 
     def shutdown(self) -> None:
+        try:
+            if self.defense is not None:
+                self.defense.shield.stop()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self._call(self.orch.shutdown(), timeout=10)
         except Exception:  # noqa: BLE001
@@ -146,6 +153,24 @@ class Backend:
                           "mem_percent": vm.percent,
                           "mem_free_mib": vm.available // (1024 * 1024),
                           "rss_mib": round(rss)},
+            "guard": {
+                "enabled": self.defense.auto_guard.enabled,
+                "cycles": self.defense.auto_guard.cycles,
+                "total_quarantined": self.defense.auto_guard.total_quarantined,
+                "total_restored": self.defense.auto_guard.total_restored,
+            },
+            "shield": {
+                "running": self.defense.shield.running,
+                "enabled": self.defense.shield.enabled,
+                "listen_host": self.defense.shield.listen_host,
+                "listen_port": self.defense.shield.listen_port,
+                "backend_host": self.defense.shield.backend_host,
+                "backend_port": self.defense.shield.backend_port,
+                "total_requests": self.defense.shield.total_requests,
+                "blocked_requests": self.defense.shield.blocked_requests,
+                "forwarded_requests": self.defense.shield.forwarded_requests,
+                "recent_blocks": list(self.defense.shield.recent_blocks),
+            },
         }
 
     def flags(self, show: bool) -> dict:
@@ -172,13 +197,55 @@ class Backend:
             "path": str(self.config_path), "ready": r.ready,
             "issues": r.issues, "warnings": r.warnings, "yaml": text,
             "pattern": self.cfg.flags.pattern, "tick": self.cfg.scoring.tick_seconds,
+            "flag_id_endpoint": self.cfg.scoring.flag_id_endpoint or "",
             "enforce": self.cfg.scope.enforce,
             "targets": [{"name": t.name, "host": t.host,
-                         "ports": list(t.ports), "kind": t.kind, "owner": t.owner}
+                         "ports": list(t.ports), "kind": t.kind, "owner": t.owner,
+                         "notes": t.notes or ""}
                         for t in self.cfg.scope.targets],
         }
 
     # --- mutating actions (token-gated) -----------------------------------------------
+    def _resolve_sweep_targets(self, host: str, port: int | None) -> tuple[list[tuple[str, int]], str | None]:
+        """Resolve (host, port) pairs to sweep. Supports '*' / 'all' for all opponent targets."""
+        h = (host or "").strip()
+        opp_targets = [t for t in self.cfg.scope.targets if t.owner == "opponent"]
+        if h in ("*", "all", "ALL"):
+            pairs = [
+                (t.host, p)
+                for t in opp_targets
+                for p in (t.ports if t.ports else (80,))
+                if self.orch.scope.check(t.host, p).allowed
+            ]
+            pairs = list(dict.fromkeys(pairs))
+            if not pairs:
+                return [], "no authorized opponent targets in scope (fail closed)"
+            return pairs, None
+
+        matches = [t for t in opp_targets if t.host == h]
+        if port is not None:
+            p = int(port)
+            if not self.orch.scope.check(h, p).allowed:
+                return [], f"{h}:{p} is NOT in authorized scope (fail closed)"
+            return [(h, p)], None
+
+        if matches:
+            pairs = list(
+                dict.fromkeys(
+                    (h, p) for m in matches for p in (m.ports if m.ports else (80,))
+                )
+            )
+        else:
+            all_matches = [t for t in self.cfg.scope.targets if t.host == h]
+            p = all_matches[0].ports[0] if all_matches and all_matches[0].ports else 80
+            pairs = [(h, p)]
+
+        authorized = [(th, tp) for th, tp in pairs if self.orch.scope.check(th, tp).allowed]
+        if not authorized:
+            first_p = pairs[0][1] if pairs else 80
+            return [], f"{h}:{first_p} is NOT in authorized scope (fail closed)"
+        return authorized, None
+
     def start_sweep(self, host: str, port: int | None, tools: bool = True,
                     nuclei: bool = False) -> dict:
         """Kick off a sweep in the background and stream progress via :meth:`attack_progress`.
@@ -187,33 +254,57 @@ class Backend:
         (fail closed). An in-scope sweep runs on the background loop; the UI polls
         ``/api/attack/progress`` to watch it live.
         """
-        port_by_host = {t.host: (t.ports[0] if t.ports else 80) for t in self.cfg.scope.targets}
-        p = port or port_by_host.get(host, 80)
         with self._attack_lock:
             if self.attack.get("status") == "running":
                 return {"error": "a sweep is already running — wait for it to finish"}
-        if not self.orch.scope.check(host, p).allowed:
-            return {"error": f"{host}:{p} is NOT in authorized scope (fail closed)"}
+        pairs, err = self._resolve_sweep_targets(host, port)
+        if err:
+            return {"error": err}
+        label = (f"ALL ({len(pairs)} target/port)" if len(pairs) > 1
+                 else f"{pairs[0][0]}:{pairs[0][1]}")
         with self._attack_lock:
             self.rounds += 1
+            self._last_auto_sweep = time.time()
             self.attack = {
-                "status": "running", "host": host, "port": p, "round": self.rounds,
+                "status": "running", "host": pairs[0][0], "port": pairs[0][1],
+                "round": self.rounds, "loop_enabled": self.attack_loop_enabled,
                 "phase": "queued", "index": 0, "total": 0, "current": "",
                 "confirmed": [], "flags": 0, "authenticated": False, "login_as": None,
                 "summary": "", "started": time.time(), "open_ports": [], "fingerprints": [],
                 "paths": [], "nuclei": [],
-                "log": [f"round {self.rounds}: ▶ sweep {host}:{p}"
+                "log": [f"round {self.rounds}: ▶ sweep {label}"
                         + ((" (tools+nuclei + recon + login + arsenal)" if nuclei
                             else " (tools + recon + login + arsenal)") if (tools or nuclei)
                            else " (recon + login + arsenal)")],
             }
         self._attack_future = asyncio.run_coroutine_threadsafe(
-            self._sweep_tracked(host, p, tools or nuclei, nuclei), self.loop)
-        return {"started": True, "host": host, "port": p, "round": self.rounds}
+            self._sweep_tracked_multi(pairs, tools or nuclei, nuclei), self.loop)
+        return {"started": True, "host": pairs[0][0], "port": pairs[0][1],
+                "targets_count": len(pairs), "round": self.rounds}
+
+    def toggle_attack_loop(self, enabled: bool | None = None) -> dict:
+        with self._attack_lock:
+            self.attack_loop_enabled = (
+                (not self.attack_loop_enabled) if enabled is None else bool(enabled)
+            )
+            self.attack["loop_enabled"] = self.attack_loop_enabled
+            active = self.attack_loop_enabled
+            running = self.attack.get("status") == "running"
+        if active and not running:
+            self.start_sweep("*", None, tools=False, nuclei=False)
+        return {"ok": True, "loop_enabled": active}
 
     def attack_progress(self) -> dict:
+        if self.attack_loop_enabled:
+            interval = max(15, int(self.cfg.scoring.tick_seconds or 60))
+            with self._attack_lock:
+                idle = self.attack.get("status") != "running"
+                due = (time.time() - self._last_auto_sweep) >= interval
+            if idle and due:
+                self.start_sweep("*", None, tools=False, nuclei=False)
         with self._attack_lock:
             snap = dict(self.attack)
+            snap["loop_enabled"] = self.attack_loop_enabled
             snap["log"] = list(self.attack.get("log", []))
             snap["confirmed"] = list(self.attack.get("confirmed", []))
             return snap
@@ -262,35 +353,80 @@ class Backend:
 
     async def _sweep_tracked(self, host: str, port: int, tools: bool = True,
                              nuclei: bool = False) -> None:
+        await self._sweep_tracked_multi([(host, port)], tools, nuclei)
+
+    async def _sweep_tracked_multi(self, pairs: list[tuple[str, int]], tools: bool = True,
+                                   nuclei: bool = False) -> None:
         from ..attack.engine import AttackEngine
         from ..attack.memory import ExploitMemory
         from ..attack.sweep import AttackSweep
         from ..core.plugin import RunContext
+        from ..scoring.tick_info import TickInfoClient
 
         kind_by_host = {t.host: t.kind for t in self.cfg.scope.targets}
+        kind_by_hp = {(t.host, p): t.kind for t in self.cfg.scope.targets for p in t.ports}
         try:
-            sweep = AttackSweep(AttackEngine(self.orch, self.inbox),
-                                memory=ExploitMemory(self.orch.state))
-            report = await sweep.run(
-                RunContext(target_host=host, target_port=port,
-                           service=kind_by_host.get(host, "web"),
-                           extra={"tool_nuclei": nuclei}),
-                recon=True, login=True, tools=tools, progress=self._on_progress)
+            eng = AttackEngine(self.orch, self.inbox)
+            sweep = AttackSweep(eng, memory=ExploitMemory(self.orch.state))
+            tick_info = TickInfoClient(self.cfg.scoring.flag_id_endpoint)
+            all_confirmed: list[str] = []
+            total_flags = 0
+            any_auth = False
+            last_login = None
+            all_ports: list[dict] = []
+            all_fps: list[str] = []
+            all_paths: list[dict] = []
+            all_nuclei: list[dict] = []
+            summaries: list[str] = []
+
+            for idx, (host, port) in enumerate(pairs, start=1):
+                with self._attack_lock:
+                    self.attack["host"] = host
+                    self.attack["port"] = port
+                    if len(pairs) > 1:
+                        self.attack.setdefault("log", []).append(
+                            f"▶ [{idx}/{len(pairs)}] sweeping {host}:{port} …"
+                        )
+                svc_kind = kind_by_hp.get((host, port), kind_by_host.get(host, "web"))
+                run_extra: dict = {"tool_nuclei": nuclei}
+                fids = await tick_info.fetch_for(host, svc_kind)
+                if fids:
+                    run_extra["flag_ids"] = fids
+                report = await sweep.run(
+                    RunContext(target_host=host, target_port=port,
+                               service=svc_kind,
+                               extra=run_extra),
+                    recon=True, login=True, tools=tools, progress=self._on_progress)
+                for m in report.confirmed_modules:
+                    if m not in all_confirmed:
+                        all_confirmed.append(m)
+                total_flags += len(report.flags_found)
+                if report.authenticated:
+                    any_auth = True
+                    last_login = report.login_as
+                all_ports.extend(report.open_ports)
+                all_fps.extend(report.fingerprints)
+                all_paths.extend(report.discovered_paths_tool)
+                all_nuclei.extend(report.nuclei)
+                summaries.append(report.summary())
+
+            final_summary = (summaries[0] if len(summaries) == 1
+                             else f"swept {len(pairs)} target(s): {len(all_confirmed)} confirmed, {total_flags} flag(s)")
             with self._attack_lock:
                 a = self.attack
                 a["status"] = "done"
                 a["phase"] = "done"
-                a["summary"] = report.summary()
-                a["confirmed"] = list(report.confirmed_modules)
-                a["flags"] = len(report.flags_found)
-                a["authenticated"] = report.authenticated
-                a["login_as"] = report.login_as
-                a["open_ports"] = list(report.open_ports)
-                a["fingerprints"] = list(report.fingerprints)
-                a["paths"] = list(report.discovered_paths_tool)
-                a["nuclei"] = list(report.nuclei)
+                a["summary"] = final_summary
+                a["confirmed"] = all_confirmed
+                a["flags"] = total_flags
+                a["authenticated"] = any_auth
+                a["login_as"] = last_login
+                a["open_ports"] = all_ports
+                a["fingerprints"] = list(dict.fromkeys(all_fps))
+                a["paths"] = all_paths
+                a["nuclei"] = all_nuclei
                 a.setdefault("log", []).append(
-                    f"✓ done — {report.summary()} → check the Flags tab (PENDING; you submit)")
+                    f"✓ done — {final_summary} → check the Flags tab (PENDING; you submit)")
         except Exception as exc:  # noqa: BLE001
             with self._attack_lock:
                 self.attack["status"] = "error"
@@ -334,6 +470,43 @@ class Backend:
         incidents = await self.defense.sweep()
         return {"incidents": len(incidents)}
 
+    def defense_guard(self, enabled: bool | None = None) -> dict:
+        return self._call(self._defense_guard(enabled), timeout=120)
+
+    async def _defense_guard(self, enabled: bool | None = None) -> dict:
+        if enabled is not None:
+            self.defense.auto_guard.set_enabled(enabled)
+        rep = await self.defense.auto_guard_once()
+        return {
+            "enabled": self.defense.auto_guard.enabled,
+            "roots_checked": rep.roots_checked,
+            "files_quarantined": rep.files_quarantined,
+            "files_restored": rep.files_restored,
+            "protected_skipped": rep.protected_skipped,
+            "errors": rep.errors,
+            "actions_taken": rep.actions_taken,
+        }
+
+    def defense_shield(self, payload: dict) -> dict:
+        action = str(payload.get("action", "toggle")).strip().lower()
+        sh = self.defense.shield
+        if action == "start":
+            lhost = str(payload.get("listen_host", "0.0.0.0") or "0.0.0.0").strip()
+            lport = int(payload.get("listen_port", 8080) or 8080)
+            bhost = str(payload.get("backend_host", "127.0.0.1") or "127.0.0.1").strip()
+            bport = int(payload.get("backend_port", 8000) or 8000)
+            if "enabled" in payload and payload["enabled"] is not None:
+                sh.set_enabled(bool(payload["enabled"]))
+            bound = sh.start(lhost, lport, bhost, bport)
+            return {"ok": True, "running": sh.running, "enabled": sh.enabled, "listen_port": bound}
+        if action == "stop":
+            sh.stop()
+            return {"ok": True, "running": sh.running, "enabled": sh.enabled}
+        # Default: toggle or set enabled ON/OFF
+        new_state = (not sh.enabled) if payload.get("enabled") is None else bool(payload["enabled"])
+        sh.set_enabled(new_state)
+        return {"ok": True, "running": sh.running, "enabled": sh.enabled}
+
     def mark(self, key: str, status: str) -> dict:
         return self._call(self._mark(key, status))
 
@@ -360,6 +533,10 @@ class Backend:
             pattern = (data.get("pattern") or "").strip() or None
             tick_raw = data.get("tick")
             tick = int(tick_raw) if str(tick_raw).strip() not in ("", "None", "0") else None
+            if "flag_id_endpoint" in data:
+                flag_id_ep = (str(data.get("flag_id_endpoint") or "").strip() or None)
+            else:
+                flag_id_ep = cfg.scoring.flag_id_endpoint
             targets_in = data.get("targets") or []
         except (TypeError, ValueError) as exc:
             return {"error": f"bad input: {exc}"}
@@ -396,6 +573,7 @@ class Backend:
             "flags": {"pattern": pattern, "auto_submit": False},
             "scoring": {"tick_seconds": tick, "epoch": cfg.scoring.epoch,
                         "expiry_ticks": cfg.scoring.expiry_ticks,
+                        "flag_id_endpoint": flag_id_ep,
                         "submit_endpoint": cfg.scoring.submit_endpoint,
                         "scoreboard_endpoint": cfg.scoring.scoreboard_endpoint}}
         text = yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
@@ -403,6 +581,8 @@ class Backend:
 
     def config_save(self, yaml_text: str) -> dict:
         import tempfile
+        from ..attack.flags.validator import FlagValidator
+        from .context import DEFAULT_CONFIG, EXAMPLE_CONFIG
 
         tmp = Path(tempfile.gettempdir()) / f"aether_cfg_{secrets.token_hex(6)}.yaml"
         tmp.write_text(yaml_text, encoding="utf-8")
@@ -417,11 +597,34 @@ class Backend:
             return {"error": "refused: scope.enforce=false would disable fail-closed scope"}
         if not cfg.scope.targets:
             return {"error": "refused: empty scope.targets (fail closed)"}
+        # Never overwrite the example template — promote to config/aether.yaml automatically.
+        if self.config_path.resolve() == EXAMPLE_CONFIG.resolve():
+            self.config_path = DEFAULT_CONFIG
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
         self.config_path.write_text(yaml_text, encoding="utf-8")
-        self.cfg = cfg  # new sweeps read this; restart the console to re-arm the live engine
+        self.cfg = cfg
+        # Hot-reload the live engine so operator changes take effect immediately without restart.
+        if self.orch is not None:
+            self.orch.config = cfg
+            self.orch.scope._enforce = cfg.scope.enforce
+            self.orch.scope.load_targets(cfg.scope.targets)
+        if self.inbox is not None:
+            self.inbox._validator = FlagValidator(cfg.flags.pattern)
+        if self.defense is not None:
+            active_self: set[str] = set()
+            for t in cfg.scope.targets:
+                notes = getattr(t, "notes", None)
+                if t.owner == "self" and notes and Path(notes).exists():
+                    active_self.add(t.name)
+                    if t.name not in self.defense._roots or self.defense._roots[t.name] != Path(notes):
+                        self.defense.watch_path(t.name, notes)
+            for old_name in list(self.defense._roots.keys()):
+                if old_name not in active_self:
+                    self.defense._roots.pop(old_name, None)
+                    self.defense.integrity.pop(old_name, None)
         r = assess_readiness(cfg)
         return {"ok": True, "ready": r.ready, "issues": r.issues, "warnings": r.warnings,
-                "note": "saved — restart the web console to apply scope to the live engine"}
+                "note": "saved and applied to live engine"}
 
 
 def _make_handler(backend: Backend, token: str):
@@ -481,8 +684,14 @@ def _make_handler(backend: Backend, token: str):
                                                     payload.get("port"),
                                                     bool(payload.get("tools", True)),
                                                     bool(payload.get("nuclei", False))))
+                elif path == "/api/attack/loop":
+                    _json(self, backend.toggle_attack_loop(payload.get("enabled")))
                 elif path == "/api/defense/sweep":
                     _json(self, backend.defense_sweep())
+                elif path == "/api/defense/guard":
+                    _json(self, backend.defense_guard(payload.get("enabled")))
+                elif path == "/api/defense/shield":
+                    _json(self, backend.defense_shield(payload))
                 elif path == "/api/defense/quarantine":
                     _json(self, backend.quarantine(payload.get("path", "")))
                 elif path == "/api/defense/audit":

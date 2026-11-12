@@ -482,6 +482,91 @@ def defense_quarantine(
     asyncio.run(_run())
 
 
+@defense_app.command("guard")
+def defense_guard(
+    config: str = typer.Option(None, "--config", "-c", help="Config path."),
+    path: str = typer.Option(None, "--path", help="Guard this directory instead of scope."),
+    interval: float = typer.Option(0.0, "--interval", "-i", help="If >0, loop every N seconds."),
+) -> None:
+    """Run AutoGuard integrity enforcement and snapshot restoration on watched roots."""
+    import asyncio
+
+    from ..core.orchestrator import Orchestrator
+    from ..defense.engine import DefenseEngine
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    async def _run() -> None:
+        orch = Orchestrator(cfg)
+        await orch.start()
+        try:
+            engine = DefenseEngine(orch)
+            if path:
+                engine.watch_path("cli", path)
+            else:
+                _watch_self_roots(engine, cfg)
+            while True:
+                rep = await engine.auto_guard_once()
+                console.print(
+                    f"[green]✓ AutoGuard pass[/]: checked={rep.roots_checked} "
+                    f"quarantined={len(rep.files_quarantined)} "
+                    f"restored={len(rep.files_restored)}"
+                )
+                for qf in rep.files_quarantined:
+                    console.print(f"  [yellow]quarantined:[/] {qf}")
+                for rf in rep.files_restored:
+                    console.print(f"  [cyan]restored:[/] {rf}")
+                for err in rep.errors:
+                    console.print(f"  [red]error:[/] {err}")
+                if interval <= 0:
+                    break
+                await asyncio.sleep(interval)
+        finally:
+            await orch.shutdown()
+
+    asyncio.run(_run())
+
+
+@defense_app.command("shield")
+def defense_shield(
+    listen_port: int = typer.Option(8080, "--listen", "-l", help="Frontend port to listen on."),
+    backend_port: int = typer.Option(8000, "--backend", "-b", help="Backend service port to forward to."),
+    listen_host: str = typer.Option("0.0.0.0", "--host", help="Bind address for shield proxy."),
+    backend_host: str = typer.Option("127.0.0.1", "--backend-host", help="Backend host."),
+    off: bool = typer.Option(False, "--off", help="Start in pass-through mode (filtering OFF)."),
+) -> None:
+    """Start the HTTP Shield reverse-proxy in front of a self-owned web service."""
+    import time
+
+    from ..defense.shield_proxy import ShieldProxy
+
+    proxy = ShieldProxy(
+        listen_host=listen_host,
+        listen_port=listen_port,
+        backend_host=backend_host,
+        backend_port=backend_port,
+        enabled=(not off),
+    )
+    bound = proxy.start()
+    mode_str = "[green]ON (BLOCKING)[/]" if proxy.enabled else "[yellow]OFF (PASS-THROUGH)[/]"
+    console.print(
+        f"[bold cyan]AETHER HTTP Shield Proxy[/] listening on [bold]{listen_host}:{bound}[/] "
+        f"→ forwarding to [bold]{backend_host}:{backend_port}[/] • Filter: {mode_str}"
+    )
+    console.print("[dim]Press Ctrl-C to stop[/]")
+    try:
+        while True:
+            time.sleep(2.0)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopping shield proxy…[/]")
+    finally:
+        proxy.stop()
+
+
 def _open_state_and_inbox(cfg):
     """Build a StateManager + FlagInbox for CLI flag commands (async)."""
     from ..attack.flags.inbox import FlagInbox
@@ -567,18 +652,33 @@ def attack_sweep(
     from ..core.orchestrator import Orchestrator
     from ..core.plugin import RunContext
 
-    # Resolve targets: explicit host, or every in-scope opponent web target.
-    opp_web = [t for t in cfg.scope.targets if t.owner == "opponent" and t.kind == "web"]
+    # Resolve targets: explicit host, or every in-scope opponent target across all ports.
+    opp_targets = [t for t in cfg.scope.targets if t.owner == "opponent"]
     if host:
-        matches = [t for t in opp_web if t.host == host]
-        default_port = port or (matches[0].ports[0] if matches and matches[0].ports else 80)
-        targets = [(host, port or default_port)]
+        matches = [t for t in opp_targets if t.host == host]
+        if port:
+            targets = [(host, port)]
+        elif matches:
+            targets = list(
+                dict.fromkeys(
+                    (host, p) for m in matches for p in (m.ports if m.ports else (80,))
+                )
+            )
+        else:
+            targets = [(host, 80)]
     else:
-        if not opp_web:
-            err_console.print("[red]✗ no in-scope opponent web targets. Configure scope "
+        if not opp_targets:
+            err_console.print("[red]✗ no in-scope opponent targets. Configure scope "
                               "or pass a host.[/]")
             raise typer.Exit(1)
-        targets = [(t.host, port or (t.ports[0] if t.ports else 80)) for t in opp_web]
+        if port:
+            targets = [(t.host, port) for t in opp_targets]
+        else:
+            targets = [
+                (t.host, p)
+                for t in opp_targets
+                for p in (t.ports if t.ports else (80,))
+            ]
 
     async def _run():
         orch = Orchestrator(cfg)
@@ -595,8 +695,12 @@ def attack_sweep(
                 err_console.print("[red]✗ nothing authorized to sweep. Aborting (fail closed).[/]")
                 raise typer.Exit(1)
 
+            from ..scoring.tick_info import TickInfoClient
+
             inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
-            sweep = AttackSweep(AttackEngine(orch, inbox), memory=ExploitMemory(orch.state))
+            eng = AttackEngine(orch, inbox)
+            sweep = AttackSweep(eng, memory=ExploitMemory(orch.state))
+            tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint)
             extra = {}
             if max_probes:
                 extra["max_probes"] = max_probes
@@ -606,11 +710,18 @@ def attack_sweep(
                 extra["tool_nuclei"] = True
             use_tools = tools or nuclei
             kind_by_host = {t.host: t.kind for t in cfg.scope.targets}
+            kind_by_hp = {(t.host, p): t.kind for t in cfg.scope.targets for p in t.ports}
             for h, p in authorized:
                 console.print(f"[cyan]▶ sweeping {h}:{p} …[/]")
+                svc_kind = kind_by_hp.get((h, p), kind_by_host.get(h, "web"))
+                run_extra = dict(extra)
+                fids = await tick_info.fetch_for(h, svc_kind)
+                if fids:
+                    run_extra["flag_ids"] = fids
                 report = await sweep.run(
                     RunContext(target_host=h, target_port=p,
-                               service=kind_by_host.get(h, "web"), extra=dict(extra)),
+                               service=svc_kind,
+                               extra=run_extra),
                     recon=recon,
                     login=login,
                     tools=use_tools,
@@ -842,14 +953,30 @@ def attack_loop(
     from ..core.orchestrator import Orchestrator
     from ..core.plugin import RunContext
 
-    opp_web = [t for t in cfg.scope.targets if t.owner == "opponent" and t.kind == "web"]
+    opp_targets = [t for t in cfg.scope.targets if t.owner == "opponent"]
     if host:
-        matches = [t for t in opp_web if t.host == host]
-        targets = [(host, port or (matches[0].ports[0] if matches and matches[0].ports else 80))]
-    elif opp_web:
-        targets = [(t.host, port or (t.ports[0] if t.ports else 80)) for t in opp_web]
+        matches = [t for t in opp_targets if t.host == host]
+        if port:
+            targets = [(host, port)]
+        elif matches:
+            targets = list(
+                dict.fromkeys(
+                    (host, p) for m in matches for p in (m.ports if m.ports else (80,))
+                )
+            )
+        else:
+            targets = [(host, 80)]
+    elif opp_targets:
+        if port:
+            targets = [(t.host, port) for t in opp_targets]
+        else:
+            targets = [
+                (t.host, p)
+                for t in opp_targets
+                for p in (t.ports if t.ports else (80,))
+            ]
     else:
-        err_console.print("[red]✗ no in-scope opponent web targets. Configure scope or pass "
+        err_console.print("[red]✗ no in-scope opponent targets. Configure scope or pass "
                           "a host.[/]")
         raise typer.Exit(1)
 
@@ -869,8 +996,12 @@ def attack_loop(
             err_console.print("[red]✗ nothing authorized to sweep. Aborting (fail closed).[/]")
             raise typer.Exit(1)
 
+        from ..scoring.tick_info import TickInfoClient
+
         inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
-        sweep = AttackSweep(AttackEngine(orch, inbox), memory=ExploitMemory(orch.state))
+        eng = AttackEngine(orch, inbox)
+        sweep = AttackSweep(eng, memory=ExploitMemory(orch.state))
+        tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint)
         extra = {"max_probes": max_probes} if max_probes else {}
         if cred:
             extra["credentials"] = list(cred)
@@ -881,10 +1012,17 @@ def attack_loop(
                 rounds += 1
                 new_flags = 0
                 kind_by_host = {t.host: t.kind for t in cfg.scope.targets}
+                kind_by_hp = {(t.host, p): t.kind for t in cfg.scope.targets for p in t.ports}
                 for h, p in authorized:
+                    svc_kind = kind_by_hp.get((h, p), kind_by_host.get(h, "web"))
+                    run_extra = dict(extra)
+                    fids = await tick_info.fetch_for(h, svc_kind)
+                    if fids:
+                        run_extra["flag_ids"] = fids
                     report = await sweep.run(
                         RunContext(target_host=h, target_port=p,
-                                   service=kind_by_host.get(h, "web"), extra=dict(extra)),
+                                   service=svc_kind,
+                                   extra=run_extra),
                         recon=recon,
                         login=login,
                         tools=(tools and rounds == 1),   # heavy scans once, not every tick

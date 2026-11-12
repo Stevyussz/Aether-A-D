@@ -23,6 +23,8 @@ from .service_monitor import ServiceFunctionalityChecker, ServiceHealthMonitor
 from .vulnerability_assessment import VulnerabilityAssessment
 from .source_audit import AuditFinding, SourceAuditor
 from .webshell_scanner import WebshellHit, WebshellScanner
+from .auto_guard import AutoGuard, GuardCycleReport
+from .shield_proxy import ShieldProxy
 
 log = get_logger("defense_engine")
 
@@ -50,6 +52,8 @@ class DefenseEngine:
         self.incidents = IncidentDetector(events=orch.events)
         self.patcher = PatchManager(self.backups, events=orch.events, state=orch.state)
         self.recovery = RecoveryManager(self.backups, events=orch.events, state=orch.state)
+        self.auto_guard = AutoGuard(self)
+        self.shield = ShieldProxy()
         self._last: list[Incident] = []
 
     def watch_path(self, name: str, root: str | Path, protected: tuple[str, ...] = ()) -> IntegrityMonitor:
@@ -57,7 +61,12 @@ class DefenseEngine:
         mon.establish_baseline()
         self.integrity[name] = mon
         self._roots[name] = Path(root)
+        self.auto_guard.ensure_snapshots()
         return mon
+
+    async def auto_guard_once(self) -> GuardCycleReport:
+        """Run a single AutoGuard integrity enforcement and restoration pass."""
+        return await self.auto_guard.enforce_once()
 
     def scan_webshells(self) -> list[WebshellHit]:
         """Read-only scan of every watched root for planted web shells."""
@@ -84,6 +93,8 @@ class DefenseEngine:
 
     async def sweep(self, log_text: str | None = None) -> list[Incident]:
         """One monitoring pass: health + integrity + logs + webshells -> incidents."""
+        if self.auto_guard.enabled:
+            await self.auto_guard.enforce_once()
         health = await self.health.check_all() if self.health._probes else []
         integrity_report = None
         for mon in self.integrity.values():

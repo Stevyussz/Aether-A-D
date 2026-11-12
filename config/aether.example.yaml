@@ -30,6 +30,7 @@ scope:
       ports: [80]
       kind: web
       owner: self
+      notes: ""              # local path to our service directory (e.g. /var/www/html)
 
 flags:
   # Official IONIC flag format. Accepts any non-empty payload inside the braces so no
@@ -38,6 +39,9 @@ flags:
   auto_submit: false        # MUST stay false — AETHER never auto-submits.
 
 scoring:
-  tick_seconds: null        # official round/tick length, once known
+  tick_seconds: null        # official round/tick length, once known (e.g. 120)
+  epoch: null               # unix timestamp of tick 0 start, if known
+  expiry_ticks: null        # flag validity window in ticks, if known
+  flag_id_endpoint: null    # URL or local file path publishing per-tick flag_ids (if provided)
   submit_endpoint: null     # operator submits manually; this is informational only
   scoreboard_endpoint: null

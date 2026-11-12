@@ -53,6 +53,12 @@ def _parse_creds(context: RunContext) -> list[tuple[str, str]]:
         elif isinstance(item, str) and ":" in item:
             u, p = item.split(":", 1)
             creds.append((u, p))
+    for fid in context.extra.get("flag_ids") or []:
+        u = str(fid).strip()
+        if u:
+            for pw in (u, "password", "123456", "admin"):
+                if (u, pw) not in creds:
+                    creds.append((u, pw))
     for pair in DEFAULT_CREDS:
         if pair not in creds:
             creds.append(pair)

@@ -24,8 +24,39 @@ from urllib.parse import parse_qs, unquote, urlparse
 ALL_VULNS = frozenset({
     "exposed_files", "path_traversal", "sqli", "command_injection", "ssti",
     "nosqli", "default_creds", "idor", "ssrf", "xxe", "graphql",
-    "elasticsearch", "jwt", "deserialization", "file_upload",
+    "elasticsearch", "jwt", "deserialization", "file_upload", "shellshock",
+    "ad_community",
 })
+
+# Admin/flag endpoints the community-A&D archetype module targets.
+_ADMIN_FLAG_ENDPOINTS = {"/admin", "/api/admin", "/internal/flags", "/api/internal/flags",
+                         "/api/flags", "/flag", "/api/flag", "/dashboard"}
+
+
+def _is_forged_admin(cookie: str) -> bool:
+    """True only for a genuinely-forged privileged session cookie (plaintext admin markers,
+    or Base64/Hex JSON that decodes to an admin claim). Clean cookies never match."""
+    low = cookie.lower()
+    if any(m in low for m in ("role=admin", "is_admin=true", "admin=1", "username=admin")):
+        return True
+    for part in cookie.split(";"):
+        if "=" not in part:
+            continue
+        val = part.split("=", 1)[1].strip()
+        candidates: list[str] = []
+        try:
+            candidates.append(base64.b64decode(val + "===").decode("utf-8", "ignore"))
+        except (binascii.Error, ValueError):
+            pass
+        try:
+            candidates.append(bytes.fromhex(val).decode("utf-8", "ignore"))
+        except ValueError:
+            pass
+        for d in candidates:
+            dl = d.lower()
+            if '"role":"admin"' in dl or '"is_admin":true' in dl or '"admin":true' in dl:
+                return True
+    return False
 
 # Secrets the JWT double will accept an HS256 token signed with (weak-secret bypass).
 _JWT_WEAK_SECRETS = ("secret", "password", "key", "jwt", "admin", "changeme")
@@ -155,6 +186,12 @@ def make_handler(flag: str, enabled: frozenset[str]):
         cookie = headers.get("Cookie", "")
         authz = headers.get("Authorization", "")
 
+        # 0b. Shellshock (CVE-2014-6271): command execution via a crafted CGI header.
+        if "shellshock" in enabled and (path.endswith(".cgi") or "/cgi-bin" in path):
+            for hv in headers.values():
+                if "() {" in hv and _is_flag_read_cmd(hv):
+                    return _page(flag)
+
         # 0. Unrestricted file upload -> web shell -> read flag (two-step, stateful).
         if "file_upload" in enabled:
             if method == "POST" and "<?php" in body and _is_flag_read_cmd(body):
@@ -272,6 +309,19 @@ def make_handler(flag: str, enabled: frozenset[str]):
                 if _looks_like_deser_gadget(v):
                     return _page(f"object restored: {flag}")
 
+        # 15. Community A&D vulnbox archetype: an admin/flag endpoint reached via a localhost
+        #     header bypass OR a forged admin session cookie leaks the flag (clean requests 404).
+        if "ad_community" in enabled:
+            p = path.rstrip("/") or "/"
+            orig = (headers.get("X-Original-URL", "")
+                    or headers.get("X-Rewrite-URL", "")).rstrip("/")
+            xff = (headers.get("X-Forwarded-For", "") or headers.get("X-Real-IP", "")).strip()
+            header_bypass = (xff in {"127.0.0.1", "localhost", "::1"}
+                             or headers.get("X-Admin", "").lower() == "true")
+            if (p in _ADMIN_FLAG_ENDPOINTS or orig in _ADMIN_FLAG_ENDPOINTS) and (
+                    _is_forged_admin(cookie) or header_bypass):
+                return _page(f"admin area: {flag}")
+
         return _page("nothing here", status=404)
 
     class _Handler(BaseHTTPRequestHandler):
@@ -282,7 +332,14 @@ def make_handler(flag: str, enabled: frozenset[str]):
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
             hdrs = {"Cookie": self.headers.get("Cookie", ""),
-                    "Authorization": self.headers.get("Authorization", "")}
+                    "Authorization": self.headers.get("Authorization", ""),
+                    "User-Agent": self.headers.get("User-Agent", ""),
+                    "Referer": self.headers.get("Referer", ""),
+                    "X-Forwarded-For": self.headers.get("X-Forwarded-For", ""),
+                    "X-Real-IP": self.headers.get("X-Real-IP", ""),
+                    "X-Admin": self.headers.get("X-Admin", ""),
+                    "X-Original-URL": self.headers.get("X-Original-URL", ""),
+                    "X-Rewrite-URL": self.headers.get("X-Rewrite-URL", "")}
             status, text = decide(method, parsed.path, parsed.query, body, hdrs)
             data = text.encode()
             self.send_response(status)

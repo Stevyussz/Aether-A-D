@@ -34,8 +34,10 @@ from .exploits.web_nosqli import NoSqlInjectionExploit
 from .exploits.web_path_traversal import PathTraversalExploit
 from .exploits.web_sqli import SqlInjectionExploit
 from .exploits.web_ssrf import SsrfExploit
+from .exploits.web_shellshock import ShellshockExploit
 from .exploits.web_ssti import SstiExploit
 from .exploits.web_xxe import XxeExploit
+from .exploits.web_ad_community import AdCommunityVulnboxExploit
 
 log = get_logger("attack_sweep")
 
@@ -59,6 +61,7 @@ WEB_EXPLOITS: tuple[type[ExploitPlugin], ...] = (
     CommandInjectionExploit,
     SstiExploit,
     FileUploadExploit,
+    ShellshockExploit,
     NoSqlInjectionExploit,
     DefaultCredsExploit,
     IdorExploit,
@@ -68,6 +71,7 @@ WEB_EXPLOITS: tuple[type[ExploitPlugin], ...] = (
     XxeExploit,
     GraphqlExploit,
     ElasticsearchExploit,
+    AdCommunityVulnboxExploit,
 )
 
 # Raw-TCP / data-store exploits for non-HTTP competition services.
@@ -92,16 +96,22 @@ def exploits_for(kind: str | None) -> list[ExploitPlugin]:
 
     Web/HTTP kinds get the HTTP arsenal; a specific datastore kind gets its module; any other
     (custom TCP) kind gets the full network set. Unknown → web (the common case).
+    Also appends any user-defined custom scripts from ``scripts/custom/``.
     """
+    from ..core.custom_script import load_custom_scripts
+
     k = (kind or "web").lower()
     if k in _WEB_KINDS:
-        return default_web_exploits()
-    if k == "redis":
-        return [RedisUnauthExploit()]
-    if k == "memcached":
-        return [MemcachedUnauthExploit()]
-    # custom TCP / unknown non-web service: try the whole network set.
-    return [cls() for cls in NETWORK_EXPLOITS]
+        base: list[ExploitPlugin] = default_web_exploits()
+    elif k == "redis":
+        base = [RedisUnauthExploit()]
+    elif k == "memcached":
+        base = [MemcachedUnauthExploit()]
+    else:
+        # custom TCP / unknown non-web service: try the whole network set.
+        base = [cls() for cls in NETWORK_EXPLOITS]
+    base.extend(load_custom_scripts())
+    return base
 
 
 @dataclass

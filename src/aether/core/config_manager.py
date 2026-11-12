@@ -8,6 +8,7 @@ The real competition values are UNKNOWN until the organizer briefing (blueprint 
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -19,6 +20,7 @@ from .models import Target
 log = get_logger("config_manager")
 
 PLACEHOLDER_TOKENS = {"", "CHANGEME", "PLACEHOLDER", "TODO", "UNKNOWN", "0.0.0.0"}
+PLACEHOLDER_SUBSTRINGS = ("CHANGEME", "PLACEHOLDER", "TODO", "OURTEAM")
 
 
 class EngineConfig(BaseModel):
@@ -47,6 +49,7 @@ class ScoringConfig(BaseModel):
     expiry_ticks: int | None = None  # flag acceptance window, in ticks
     submit_endpoint: str | None = None  # informational only — operator submits manually
     scoreboard_endpoint: str | None = None
+    flag_id_endpoint: str | None = None  # organizer endpoint publishing per-tick flag IDs
 
 
 class AetherConfig(BaseModel):
@@ -92,11 +95,31 @@ def assess_readiness(cfg: AetherConfig) -> ConfigReadiness:
         issues.append("scope.enforce=true but no authorized targets configured (fail closed)")
 
     for t in cfg.scope.targets:
-        if t.host.strip().upper() in PLACEHOLDER_TOKENS:
+        host_up = t.host.strip().upper()
+        name_up = t.name.strip().upper()
+        if host_up in PLACEHOLDER_TOKENS or any(tok in host_up for tok in PLACEHOLDER_SUBSTRINGS):
             issues.append(f"target '{t.name}' host is a placeholder: {t.host!r}")
+        if any(tok in name_up for tok in PLACEHOLDER_SUBSTRINGS):
+            issues.append(f"target '{t.name}' name still contains a placeholder token")
+        if t.owner not in ("opponent", "self"):
+            issues.append(f"target '{t.name}' has invalid owner {t.owner!r} (must be 'opponent' or 'self')")
+        if any(p < 1 or p > 65535 for p in t.ports):
+            issues.append(f"target '{t.name}' has out-of-range port(s): {list(t.ports)}")
+        if not t.ports:
+            warnings.append(f"target '{t.name}' has no ports specified — will default to port 80")
+        if t.owner == "self" and t.notes and not Path(t.notes).exists():
+            warnings.append(f"self target '{t.name}' notes path does not exist: {t.notes}")
 
-    if cfg.flags.pattern is None:
+    if cfg.scope.targets and not any(t.owner == "opponent" for t in cfg.scope.targets):
+        warnings.append("no target with owner='opponent' configured")
+
+    if cfg.flags.pattern is None or not cfg.flags.pattern.strip():
         warnings.append("flags.pattern not set — flag extraction will not match anything")
+    else:
+        try:
+            re.compile(cfg.flags.pattern)
+        except re.error as exc:
+            issues.append(f"flags.pattern is not a valid regex ({cfg.flags.pattern!r}): {exc}")
 
     if cfg.scoring.tick_seconds is None:
         warnings.append("scoring.tick_seconds not set — polling cadence unknown")

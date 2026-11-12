@@ -21,6 +21,10 @@ from .models import Target
 log = get_logger("scope_guard")
 
 
+PLACEHOLDER_HOSTS = {"", "CHANGEME", "PLACEHOLDER", "TODO", "UNKNOWN", "0.0.0.0"}
+PLACEHOLDER_SUBSTRINGS = ("CHANGEME", "PLACEHOLDER", "TODO", "OURTEAM")
+
+
 class ScopeViolation(Exception):
     """Raised when an operation is attempted against an out-of-scope target."""
 
@@ -42,6 +46,7 @@ class ScopeGuard:
         self._hosts: set[str] = set()
         self._networks: list[ipaddress._BaseNetwork] = []
         self._ports: dict[str, set[int]] = {}  # host -> allowed ports (empty set = any)
+        self._net_ports: dict[ipaddress._BaseNetwork, set[int]] = {}  # net -> allowed ports
         self._targets: dict[str, Target] = {}
 
     @property
@@ -53,8 +58,12 @@ class ScopeGuard:
         self._hosts.clear()
         self._networks.clear()
         self._ports.clear()
+        self._net_ports.clear()
         self._targets.clear()
         for t in targets:
+            h_up = (t.host or "").strip().upper()
+            if h_up in PLACEHOLDER_HOSTS or any(tok in h_up for tok in PLACEHOLDER_SUBSTRINGS):
+                continue
             self.allow(t.host, ports=t.ports, name=t.name)
             self._targets[t.host] = t
         log.info(
@@ -69,10 +78,16 @@ class ScopeGuard:
         # Try to interpret as a network/CIDR first, then a bare IP, else a hostname.
         try:
             if "/" in host:
-                self._networks.append(ipaddress.ip_network(host, strict=False))
-            else:
-                ipaddress.ip_address(host)  # validate it is an IP
-                self._hosts.add(host)
+                net = ipaddress.ip_network(host, strict=False)
+                if net not in self._networks:
+                    self._networks.append(net)
+                if ports:
+                    self._net_ports.setdefault(net, set()).update(ports)
+                else:
+                    self._net_ports[net] = set()
+                return
+            ipaddress.ip_address(host)  # validate it is an IP
+            self._hosts.add(host)
         except ValueError:
             # Not an IP/CIDR -> treat as an exact hostname (lowercased).
             self._hosts.add(host.lower())
@@ -87,8 +102,9 @@ class ScopeGuard:
         host = (host or "").strip()
         if not self._enforce:
             return ScopeDecision(True, "enforcement disabled (lab mode)", host, port)
-        if not host:
-            return ScopeDecision(False, "empty/unknown target host", host, port)
+        h_up = host.upper()
+        if not host or h_up in PLACEHOLDER_HOSTS or any(tok in h_up for tok in PLACEHOLDER_SUBSTRINGS):
+            return ScopeDecision(False, "empty/placeholder target host", host, port)
         if self.is_empty():
             return ScopeDecision(False, "scope is empty — fail closed", host, port)
 
@@ -96,13 +112,27 @@ class ScopeGuard:
         if not matched:
             return ScopeDecision(False, "host not in authorized allowlist", host, port)
 
-        if port is not None:
-            allowed_ports = self._ports.get(host.lower() if not _is_ip(host) else host, set())
-            if allowed_ports and port not in allowed_ports:
-                return ScopeDecision(
-                    False, f"port {port} not authorized for host", host, port
-                )
+        if port is not None and not self._port_in_scope(host, port):
+            return ScopeDecision(
+                False, f"port {port} not authorized for host", host, port
+            )
         return ScopeDecision(True, "authorized", host, port)
+
+    def _port_in_scope(self, host: str, port: int) -> bool:
+        if _is_ip(host):
+            if host in self._hosts:
+                hp = self._ports.get(host, set())
+                if not hp or port in hp:
+                    return True
+            addr = ipaddress.ip_address(host)
+            for net in self._networks:
+                if addr in net:
+                    np = self._net_ports.get(net, set())
+                    if not np or port in np:
+                        return True
+            return False
+        allowed_ports = self._ports.get(host.lower(), set())
+        return not allowed_ports or port in allowed_ports
 
     def enforce(self, host: str, port: int | None = None) -> None:
         """Raise ScopeViolation if not allowed. Use before any target access."""

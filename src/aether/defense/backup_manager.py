@@ -129,6 +129,12 @@ class BackupManager:
             return out
 
         target.mkdir(parents=True, exist_ok=True)
+        expected_rels = set(manifest["files"].keys())
+        for existing in sorted(target.rglob("*"), reverse=True):
+            if existing.is_file():
+                rel = str(existing.relative_to(target))
+                if rel not in expected_rels:
+                    existing.unlink(missing_ok=True)
         for rel, digest in manifest["files"].items():
             out = target / rel
             out.parent.mkdir(parents=True, exist_ok=True)

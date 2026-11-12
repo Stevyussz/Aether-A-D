@@ -61,6 +61,14 @@ def test_port_restriction():
     assert g.check("10.0.0.5").allowed
 
 
+def test_cidr_port_restriction():
+    g = ScopeGuard(enforce=True)
+    g.allow("10.60.0.0/24", ports=(80, 8080))
+    assert g.check("10.60.0.15", 80).allowed
+    assert g.check("10.60.0.15", 8080).allowed
+    assert not g.check("10.60.0.15", 22).allowed
+
+
 def test_load_targets_replaces_allowlist():
     g = ScopeGuard(enforce=True)
     g.allow("1.1.1.1")

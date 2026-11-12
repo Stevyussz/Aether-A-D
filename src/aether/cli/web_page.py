@@ -120,6 +120,10 @@ PAGE = r"""<!DOCTYPE html>
       <label class="muted" style="margin-left:14px"><input type="checkbox" id="usenuclei">
         + nuclei (CVE checks — lebih lambat, hasil jadi lead)</label>
       <div style="height:10px"></div>
+      <div class="row" style="margin-bottom:10px">
+        <button class="act" onclick="sweep('*',null)">▶ Sweep SEMUA Lawan (All Targets &amp; Ports)</button>
+        <button class="ghost" id="btn-atk-loop" onclick="toggleAttackLoop()">Switch Auto-Attack Loop: OFF</button>
+      </div>
       <div id="targets"></div>
     </div>
     <div style="height:14px"></div>
@@ -148,8 +152,34 @@ PAGE = r"""<!DOCTYPE html>
       <div class="row">
         <button class="act" onclick="defSweep()">Jalankan defense sweep</button>
         <button class="act" onclick="defAudit()">Self-audit source (patch diri dulu)</button>
+        <button class="ghost" onclick="runGuardNow()">Jalankan AutoGuard 1x</button>
         <button class="ghost" onclick="tick()">Scan ulang web shell</button>
         <span class="muted" id="defout"></span>
+      </div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="grid">
+      <div class="card">
+        <h3>perisai file (AutoGuard — self-healing &amp; karantina)</h3>
+        <p class="muted">Otomatis karantina file asing &amp; pulihkan file inti dari snapshot setiap siklus.</p>
+        <div class="row" style="margin-top:8px">
+          <button class="act" id="btn-guard-toggle" onclick="toggleGuard()">Switch AutoGuard: OFF</button>
+          <span class="muted" id="guard-stat">status: OFF</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>perisai jaringan (HTTP Shield Proxy — filter input)</h3>
+        <p class="muted">Reverse-proxy di depan port web kita dengan saklar ON/OFF instan.</p>
+        <div class="row" style="margin-top:6px">
+          <label class="muted">listen port <input id="sh-listen" type="number" value="8080" style="width:78px" class="builder-in"></label>
+          <label class="muted">backend port <input id="sh-backend" type="number" value="8000" style="width:78px" class="builder-in"></label>
+          <button class="act" id="btn-sh-run" onclick="startShield()">Start Proxy</button>
+          <button class="ghost" id="btn-sh-stop" onclick="stopShield()">Stop</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="act" id="btn-sh-toggle" onclick="toggleShieldFilter()">Filter Switch: ON (BLOCKING)</button>
+          <span class="muted" id="sh-stat">proxy: stopped</span>
+        </div>
       </div>
     </div>
     <div style="height:14px"></div>
@@ -205,6 +235,9 @@ PAGE = r"""<!DOCTYPE html>
         <label class="muted">tick seconds
           <input id="ftick" type="number" placeholder="120"
             style="width:90px;background:#05090f;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px"></label>
+        <label class="muted">flag_id endpoint (optional)
+          <input id="fflagid" class="mono" placeholder="http://10.60.0.1/flag_ids.json"
+            style="width:260px;background:#05090f;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px"></label>
         <label class="muted"><input type="checkbox" id="fenforce" checked> enforce scope
           (keep ON)</label>
       </div>
@@ -391,6 +424,54 @@ function renderDefense(s){
     s.services.map(h=>`<tr><td>${esc(h.service)}</td><td class="${h.up?'up':'down'}">${h.up?'● UP':'● DOWN'}</td><td class="mut">${h.latency_ms} ms</td><td>${h.functional==null?'<span class="mut">n/a</span>':(h.functional?'<span class="up">pass</span>':'<span class="down">FAIL</span>')}</td></tr>`).join("")+`</table>`:'<span class="mut">no service probes</span>';
   $("#def-mods").innerHTML=(s.mods||[]).length?`<table><tr><th>time</th><th>component</th><th>action</th><th>target</th></tr>`+
     s.mods.map(m=>`<tr><td class="mut">${esc(m.ts)}</td><td>${esc(m.component)}</td><td>${esc(m.action)}</td><td class="mut">${esc(m.target)}</td></tr>`).join("")+`</table>`:'<span class="mut">belum ada perubahan tercatat</span>';
+  if(s.guard){
+    window._guardEnabled=!!s.guard.enabled;
+    const gb=$("#btn-guard-toggle");
+    if(gb){gb.textContent=s.guard.enabled?"Switch AutoGuard: ON (AKTIF)":"Switch AutoGuard: OFF";
+      gb.style.background=s.guard.enabled?"var(--green)":"var(--panel2)";
+      gb.style.color=s.guard.enabled?"#04121a":"var(--fg)";}
+    const gs=$("#guard-stat");
+    if(gs)gs.innerHTML=`cycles: <b>${s.guard.cycles||0}</b> · quarantined: <b>${s.guard.total_quarantined||0}</b> · restored: <b>${s.guard.total_restored||0}</b>`;
+  }
+  if(s.shield){
+    window._shieldEnabled=!!s.shield.enabled;
+    const sb=$("#btn-sh-toggle");
+    if(sb){sb.textContent=s.shield.enabled?"Filter Switch: ON (BLOCKING)":"Filter Switch: OFF (PASS-THROUGH)";
+      sb.style.background=s.shield.enabled?"var(--green)":"var(--yellow)";
+      sb.style.color="#04121a";}
+    const ss=$("#sh-stat");
+    if(ss)ss.innerHTML=(s.shield.running?`<span class="up">● RUNNING (:${s.shield.listen_port} → :${s.shield.backend_port})</span>`:`<span class="mut">● stopped</span>`)+
+      ` · req: <b>${s.shield.total_requests||0}</b> · blocked: <b class="${s.shield.blocked_requests?'down':'up'}">${s.shield.blocked_requests||0}</b>`;
+  }
+}
+async function toggleGuard(){
+  const next=!window._guardEnabled;
+  const r=await postJSON("/api/defense/guard",{enabled:next});
+  $("#defout").textContent=`AutoGuard ${r.enabled?'ON':'OFF'} (quarantined=${(r.files_quarantined||[]).length}, restored=${(r.files_restored||[]).length})`;
+  tick();
+}
+async function runGuardNow(){
+  const r=await postJSON("/api/defense/guard",{});
+  $("#defout").textContent=`AutoGuard pass selesai: quarantined=${(r.files_quarantined||[]).length}, restored=${(r.files_restored||[]).length}`;
+  tick();
+}
+async function startShield(){
+  const lp=parseInt($("#sh-listen").value||"8080",10);
+  const bp=parseInt($("#sh-backend").value||"8000",10);
+  const r=await postJSON("/api/defense/shield",{action:"start",listen_port:lp,backend_port:bp});
+  $("#defout").textContent=r.error?("✗ "+r.error):`Shield proxy aktif di port ${r.listen_port} → backend ${bp}`;
+  tick();
+}
+async function stopShield(){
+  await postJSON("/api/defense/shield",{action:"stop"});
+  $("#defout").textContent="Shield proxy dihentikan";
+  tick();
+}
+async function toggleShieldFilter(){
+  const next=!window._shieldEnabled;
+  const r=await postJSON("/api/defense/shield",{action:"toggle",enabled:next});
+  $("#defout").textContent=`Shield filter: ${r.enabled?'ON (BLOCKING)':'OFF (PASS-THROUGH)'}`;
+  tick();
 }
 async function defSweep(){
   $("#defout").textContent="menjalankan defense sweep…";
@@ -421,9 +502,15 @@ async function quarantineDef(i){
 
 async function loadTargets(){
   const c=await getJSON("/api/config");
-  $("#targets").innerHTML=`<table><tr><th>name</th><th>host:port</th><th>kind</th><th>owner</th><th></th></tr>`+
-    c.targets.map(t=>{const hp=`${t.host}:${t.ports[0]||80}`;
-      const btn=t.owner==="opponent"?`<button class="act" onclick="sweep('${esc(t.host)}',${t.ports[0]||80})">Sweep</button>`:'<span class="mut">self</span>';
+  $("#targets").innerHTML=`<table><tr><th>name</th><th>host:ports</th><th>kind</th><th>owner</th><th>actions</th></tr>`+
+    c.targets.map(t=>{
+      const pts=(t.ports&&t.ports.length)?t.ports:[80];
+      const hp=`${t.host}:${pts.join(",")}`;
+      let btn='<span class="mut">self (defended)</span>';
+      if(t.owner==="opponent"){
+        btn=pts.map(p=>`<button class="act" style="margin-right:4px" onclick="sweep('${esc(t.host)}',${p})">Sweep :${p}</button>`).join("");
+        if(pts.length>1) btn+=`<button class="ghost" onclick="sweep('${esc(t.host)}',null)">All Ports</button>`;
+      }
       return `<tr><td>${esc(t.name)}</td><td class="mono">${esc(hp)}</td><td>${esc(t.kind)}</td><td class="${t.owner==='opponent'?'down':'up'}">${esc(t.owner)}</td><td>${btn}</td></tr>`;}).join("")+`</table>`;
 }
 let progTimer=null;
@@ -432,7 +519,17 @@ async function sweep(host,port){
   const nuclei=$("#usenuclei")?$("#usenuclei").checked:false;
   const r=await postJSON("/api/attack/sweep",{host,port,tools,nuclei});
   if(r.error){$("#attackout").textContent="✗ "+r.error;return;}
-  $("#attackout").textContent=`▶ round ${r.round}: sweeping ${host}:${port} …`;
+  $("#attackout").textContent=`▶ round ${r.round}: sweeping ${host==='*'?'ALL opponents':(host+(port?(":"+port):" (all ports)"))} …`;
+  startProgress();
+}
+async function toggleAttackLoop(){
+  const next=!window._atkLoop;
+  const r=await postJSON("/api/attack/loop",{enabled:next});
+  window._atkLoop=!!r.loop_enabled;
+  const b=$("#btn-atk-loop");
+  if(b){b.textContent=window._atkLoop?"Switch Auto-Attack Loop: ON (AKTIF)":"Switch Auto-Attack Loop: OFF";
+    b.style.background=window._atkLoop?"var(--green)":"transparent";
+    b.style.color=window._atkLoop?"#04121a":"var(--fg)";}
   startProgress();
 }
 function renderIntel(p){
@@ -448,6 +545,13 @@ function renderIntel(p){
 function startProgress(){if(progTimer)clearInterval(progTimer);pollProgress();progTimer=setInterval(pollProgress,1200);}
 async function pollProgress(){
   let p; try{p=await getJSON("/api/attack/progress");}catch(e){return;}
+  if(p&&typeof p.loop_enabled==="boolean"){
+    window._atkLoop=p.loop_enabled;
+    const b=$("#btn-atk-loop");
+    if(b){b.textContent=window._atkLoop?"Switch Auto-Attack Loop: ON (AKTIF)":"Switch Auto-Attack Loop: OFF";
+      b.style.background=window._atkLoop?"var(--green)":"transparent";
+      b.style.color=window._atkLoop?"#04121a":"var(--fg)";}
+  }
   if(!p||p.status==="idle"){$("#progcur").textContent="idle — pilih target di atas lalu klik Sweep";return;}
   const pct=p.total?Math.round(100*p.index/p.total):(p.status==="done"?100:5);
   $("#progbar").style.width=pct+"%";
@@ -508,6 +612,7 @@ function fillBuilder(c){
   if(!(c.targets||[]).length)addRow();
   $("#fpattern").value=c.pattern||"";
   $("#ftick").value=c.tick||"";
+  if($("#fflagid"))$("#fflagid").value=c.flag_id_endpoint||"";
   $("#fenforce").checked=c.enforce!==false;
 }
 async function applyScope(){
@@ -523,9 +628,10 @@ async function applyScope(){
   $("#builderout").textContent="saving…";
   const r=await postJSON("/api/config/apply",{
     pattern:$("#fpattern").value.trim(),tick:$("#ftick").value.trim(),
+    flag_id_endpoint:$("#fflagid")?$("#fflagid").value.trim():"",
     enforce:$("#fenforce").checked,targets});
   if(r.error){$("#builderout").innerHTML='<span class="down">✗ '+esc(r.error)+'</span>';return;}
-  $("#builderout").innerHTML=(r.ready?'<span class="up">✓ saved — READY</span>':'<span class="warn">✓ saved — not ready: '+esc((r.issues||[]).join("; "))+'</span>')+' <span class="muted">(restart the web console to re-arm the live engine)</span>';
+  $("#builderout").innerHTML=(r.ready?'<span class="up">✓ saved — READY</span>':'<span class="warn">✓ saved — not ready: '+esc((r.issues||[]).join("; "))+'</span>')+' <span class="muted">(live engine hot-reloaded automatically)</span>';
   loadConfig();
 }
 async function loadConfig(){
@@ -537,8 +643,8 @@ async function loadConfig(){
     :`<div class="banner bad">✗ NOT READY (fail closed):<br>`+c.issues.map(esc).join("<br>")+`</div>`;
   if(c.warnings&&c.warnings.length)b+=`<div class="banner" style="border-color:var(--yellow);color:var(--yellow)">⚠ `+c.warnings.map(esc).join("<br>⚠ ")+`</div>`;
   $("#cfgbanner").innerHTML=b;
-  $("#scopetable").innerHTML=c.targets.length?`<table><tr><th>name</th><th>host:port</th><th>kind</th><th>owner</th></tr>`+
-    c.targets.map(t=>`<tr><td>${esc(t.name)}</td><td class="mono">${esc(t.host)}:${t.ports[0]||80}</td><td>${esc(t.kind)}</td><td class="${t.owner==='opponent'?'down':'up'}">${esc(t.owner)}</td></tr>`).join("")+`</table>`:'<span class="mut">no targets</span>';
+  $("#scopetable").innerHTML=c.targets.length?`<table><tr><th>name</th><th>host:ports</th><th>kind</th><th>owner</th><th>notes</th></tr>`+
+    c.targets.map(t=>`<tr><td>${esc(t.name)}</td><td class="mono">${esc(t.host)}:${esc((t.ports||[]).join(",")||"80")}</td><td>${esc(t.kind)}</td><td class="${t.owner==='opponent'?'down':'up'}">${esc(t.owner)}</td><td class="mono mut">${esc(t.notes||"-")}</td></tr>`).join("")+`</table>`:'<span class="mut">no targets</span>';
 }
 async function saveConfig(){
   $("#cfgout").textContent="saving…";
