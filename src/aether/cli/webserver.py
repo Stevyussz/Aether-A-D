@@ -432,6 +432,8 @@ class Backend:
                         )
                 svc_kind = kind_by_hp.get((host, port), kind_by_host.get(host, "web"))
                 run_extra: dict = {"tool_nuclei": nuclei}
+                if self.cfg.harvest.enabled and self.cfg.harvest.paths:
+                    run_extra["harvest_paths"] = list(self.cfg.harvest.paths)
                 fids = await tick_info.fetch_for(host, svc_kind)
                 if fids:
                     run_extra["flag_ids"] = fids
@@ -470,6 +472,17 @@ class Backend:
                 a["nuclei"] = all_nuclei
                 a.setdefault("log", []).append(
                     f"✓ done — {final_summary} → check the Flags tab (PENDING; you submit)")
+            # Auto-submit this round's flags to the organizer, if the operator enabled it and
+            # the submission channel is configured (fail-closed otherwise).
+            if getattr(self, "auto_submit_enabled", False):
+                try:
+                    res = await self._submit_flags(None)
+                    if res.get("summary"):
+                        with self._attack_lock:
+                            self.attack.setdefault("log", []).append(f"↑ auto-submit: {res['summary']}")
+                except Exception as exc:  # noqa: BLE001
+                    with self._attack_lock:
+                        self.attack.setdefault("log", []).append(f"↑ auto-submit error: {exc}")
         except Exception as exc:  # noqa: BLE001
             with self._attack_lock:
                 self.attack["status"] = "error"
@@ -584,6 +597,82 @@ class Backend:
                 "rejected": report.rejected, "expired": report.expired,
                 "unknown": report.submitted, "errors": report.errors,
                 "summary": report.summary()}
+
+    def toggle_auto_submit(self, enabled: bool | None = None) -> dict:
+        """Turn per-round auto-submit on/off. Fail-closed: effective only when submission is armed."""
+        from ..scoring.submitter import submit_config_from
+        cur = getattr(self, "auto_submit_enabled", False)
+        self.auto_submit_enabled = (not cur) if enabled is None else bool(enabled)
+        armed, reason = submit_config_from(self.cfg.submission).ready()
+        return {"ok": True, "auto_submit": self.auto_submit_enabled, "armed": armed,
+                "reason": None if armed else reason}
+
+    def set_harvest(self, data: dict) -> dict:
+        """Set the known flag paths the harvester fires at every target each tick."""
+        raw = data.get("paths")
+        if isinstance(raw, str):
+            paths = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        else:
+            paths = [str(p).strip() for p in (raw or []) if str(p).strip()]
+        self.cfg.harvest.paths = paths
+        self.cfg.harvest.enabled = bool(data.get("enabled", True))
+        return {"ok": True, "paths": paths, "enabled": self.cfg.harvest.enabled}
+
+    def sync_targets(self) -> dict:
+        return self._call(self._sync_targets(), timeout=30)
+
+    async def _sync_targets(self) -> dict:
+        """Pull the live opponent roster from the Targets API and load it into scope so the
+        auto-attack loop attacks everyone. Reuses the submission Bearer token."""
+        from ..core.config_manager import Target
+        from ..scoring.targets_sync import TargetsClient
+        ep = self.cfg.scoring.targets_endpoint
+        if not ep:
+            return {"error": "scoring.targets_endpoint not set"}
+        sub = self.cfg.submission
+        tc = TargetsClient(ep, token=sub.token, token_header=sub.token_header or "Authorization")
+        found = await tc.fetch()
+        healthy = [t for t in found if t.healthy]
+        existing = {(t.host, tuple(t.ports)) for t in self.cfg.scope.targets}
+        added = 0
+        for t in healthy:
+            self.orch.scope.allow(t.host, ports=(t.port,))
+            key = (t.host, (t.port,))
+            if key not in existing:
+                self.cfg.scope.targets.append(Target(
+                    name=(t.team or f"opp-{t.host}")[:40], host=t.host, ports=(t.port,),
+                    kind="web", owner="opponent"))
+                existing.add(key)
+                added += 1
+        return {"ok": True, "roster": len(found), "healthy": len(healthy), "added": added,
+                "targets": [f"{t.host}:{t.port} ({t.status})" for t in healthy]}
+
+    def defense_remote(self, data: dict) -> dict:
+        """SSH into our own box: audit source + web shells + privesc; optional reversible harden.
+        Runs in the HTTP handler thread (blocking ssh), so it never stalls the async loop."""
+        import tempfile
+
+        from ..defense.remote_audit import RemoteDefense
+        ssh = (data.get("ssh") or "").strip()
+        if not ssh:
+            return {"error": "no --ssh args given (e.g. '6@10.2.4.4 -p 2222 -i ~/.ssh/key')"}
+        webroot = (data.get("webroot") or "/var/www/html").strip()
+        rd = RemoteDefense(ssh, webroot=webroot)
+        report = rd.audit(tempfile.mkdtemp(prefix="ae_remote_"))
+        if not report.connected:
+            return {"error": f"SSH failed: {report.error}"}
+        out = {
+            "ok": True, "whoami": report.whoami,
+            "audit": [{"severity": f.severity, "category": f.category,
+                       "location": f"{f.path}:{f.line}" if f.line else f.path,
+                       "fix": f.remediation} for f in report.audit],
+            "webshells": [{"path": h.path, "sigs": list(h.signatures)} for h in report.webshells],
+            "suspect_suid": report.suspect_suid,
+            "sudo": report.enum.get("sudo rights", ""),
+        }
+        if data.get("harden"):
+            out["hardened"] = rd.harden(report)
+        return out
 
     def oast_view(self, limit: int = 40) -> dict:
         return {"stats": self.oast.stats(),
@@ -785,6 +874,14 @@ def _make_handler(backend: Backend, token: str):
                                                     bool(payload.get("nuclei", False))))
                 elif path == "/api/attack/loop":
                     _json(self, backend.toggle_attack_loop(payload.get("enabled")))
+                elif path == "/api/attack/targets-sync":
+                    _json(self, backend.sync_targets())
+                elif path == "/api/attack/auto-submit":
+                    _json(self, backend.toggle_auto_submit(payload.get("enabled")))
+                elif path == "/api/attack/harvest":
+                    _json(self, backend.set_harvest(payload))
+                elif path == "/api/defense/remote":
+                    _json(self, backend.defense_remote(payload))
                 elif path == "/api/defense/sweep":
                     _json(self, backend.defense_sweep())
                 elif path == "/api/defense/guard":

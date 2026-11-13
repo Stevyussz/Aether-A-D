@@ -127,6 +127,25 @@ PAGE = r"""<!DOCTYPE html>
       <div id="targets"></div>
     </div>
     <div style="height:14px"></div>
+    <div class="card">
+      <h3>farm control — auto multi-target (satset)</h3>
+      <p class="muted">Tarik daftar lawan dari Targets API → auto-attack loop serang semua →
+        auto-submit tiap ronde. Harvester ambil flag dari path yang kamu tau ke SEMUA target.</p>
+      <div class="row" style="margin-bottom:8px">
+        <button class="act" onclick="syncTargets()">⟳ Sync target dari API</button>
+        <button class="ghost" id="btn-autosub" onclick="toggleAutoSubmit()">Auto-submit: OFF</button>
+      </div>
+      <div id="farmout" class="muted" style="font-size:12px"></div>
+      <div style="height:8px"></div>
+      <label class="muted">Harvest paths (satu per baris; {ip}/{port} boleh) — path yang membocorkan flag:</label>
+      <textarea id="harvestpaths" class="builder-in" style="width:100%;height:68px;font-family:monospace"
+        placeholder="/index.php?page=/home/mahasiswa/flag.txt"></textarea>
+      <div class="row" style="margin-top:6px">
+        <button class="act" onclick="saveHarvest()">Simpan harvest paths</button>
+        <span id="harveststat" class="muted"></span>
+      </div>
+    </div>
+    <div style="height:14px"></div>
     <div class="card" id="progcard">
       <h3>live sweep <span id="progphase" class="mut"></span></h3>
       <div id="progbarwrap" style="background:var(--panel2);border:1px solid var(--line);
@@ -175,6 +194,25 @@ PAGE = r"""<!DOCTYPE html>
         <button class="ghost" onclick="tick()">Scan ulang web shell</button>
         <span class="muted" id="defout"></span>
       </div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="card">
+      <h3>defense remote — SSH ke box kita, audit + harden (satset)</h3>
+      <p class="muted">AETHER masuk SSH ke vulnbox kita sendiri: audit source (sink + upload-blacklist),
+        scan web shell, dan privesc (SUID non-standar). <b>--harden</b> (opsional, reversible) cabut
+        SUID + karantina webshell — tidak menyentuh Apache/health/proof/flag (SLA aman).</p>
+      <div class="row" style="margin-top:6px">
+        <input id="rem-ssh" type="text" class="builder-in" style="flex:1;min-width:260px;font-family:monospace"
+          placeholder="6@10.2.4.4 -p 2222 -i ~/.ssh/key">
+        <input id="rem-webroot" type="text" class="builder-in" style="width:160px;font-family:monospace"
+          value="/var/www/html">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="act" onclick="defRemote(false)">Audit (read-only)</button>
+        <button class="ghost" onclick="defRemote(true)">Audit + Harden (cabut SUID + karantina)</button>
+        <span id="remstat" class="muted"></span>
+      </div>
+      <div id="remout" class="log" style="max-height:240px;overflow:auto;margin-top:8px"></div>
     </div>
     <div style="height:14px"></div>
     <div class="grid">
@@ -589,6 +627,48 @@ async function toggleAttackLoop(){
     b.style.background=window._atkLoop?"var(--green)":"transparent";
     b.style.color=window._atkLoop?"#04121a":"var(--fg)";}
   startProgress();
+}
+async function syncTargets(){
+  const o=$("#farmout"); if(o) o.textContent="⟳ sync…";
+  const r=await postJSON("/api/attack/targets-sync",{});
+  if(o){ o.textContent = r.error ? ("✗ "+r.error)
+    : `✓ roster ${r.roster}, sehat ${r.healthy}, +${r.added} target ke scope: `+(r.targets||[]).join(", "); }
+  if(!r.error) tick();
+}
+async function toggleAutoSubmit(){
+  const r=await postJSON("/api/attack/auto-submit",{enabled:!window._autosub});
+  window._autosub=!!r.auto_submit;
+  const b=$("#btn-autosub");
+  if(b){ b.textContent=window._autosub?"Auto-submit: ON (AKTIF)":"Auto-submit: OFF";
+    b.style.background=window._autosub?"var(--green)":"transparent";
+    b.style.color=window._autosub?"#04121a":"var(--fg)"; }
+  if(window._autosub && r.armed===false) alert("Auto-submit nyala, tapi submission belum armed: "+(r.reason||"cek config submission"));
+}
+async function saveHarvest(){
+  const paths=$("#harvestpaths")?$("#harvestpaths").value:"";
+  const r=await postJSON("/api/attack/harvest",{paths:paths,enabled:true});
+  const s=$("#harveststat");
+  if(s) s.textContent = r.ok ? `✓ ${r.paths.length} path disimpan (dipakai tiap sweep/farm)` : ("✗ "+(r.error||"gagal"));
+}
+async function defRemote(harden){
+  const ssh=$("#rem-ssh")?$("#rem-ssh").value.trim():"";
+  const webroot=$("#rem-webroot")?$("#rem-webroot").value.trim():"/var/www/html";
+  if(!ssh){ alert("Isi SSH args dulu, mis. 6@10.2.4.4 -p 2222 -i ~/.ssh/key"); return; }
+  if(harden && !confirm("Harden box: cabut SUID non-standar + karantina webshell (reversible). Lanjut?")) return;
+  const st=$("#remstat"); if(st) st.textContent="⟳ SSH + audit…";
+  const out=$("#remout"); if(out) out.innerHTML="";
+  const r=await postJSON("/api/defense/remote",{ssh:ssh,webroot:webroot,harden:harden});
+  if(st) st.textContent = r.error ? ("✗ "+r.error) : ("✓ "+(r.whoami||"connected"));
+  if(r.error || !out) return;
+  let h="";
+  (r.audit||[]).forEach(f=>{h+=`<div><span class="sev-${f.severity==='CRITICAL'||f.severity==='HIGH'?'CRITICAL':'WARNING'}">${esc(f.severity)}</span> ${esc(f.category)} @ ${esc(f.location)} — ${esc(f.fix)}</div>`;});
+  if((r.webshells||[]).length) h+='<div style="color:var(--red);margin-top:6px">⚠ webshell: '+r.webshells.map(w=>esc(w.path)+" ("+w.sigs.join(",")+")").join("; ")+'</div>';
+  else h+='<div style="color:var(--green)">✓ tidak ada webshell</div>';
+  if((r.suspect_suid||[]).length) h+='<div style="color:var(--red)">⚠ SUID non-standar: '+r.suspect_suid.map(esc).join(", ")+' → cabut (chmod u-s)</div>';
+  else h+='<div style="color:var(--green)">✓ tidak ada SUID non-standar</div>';
+  if(r.sudo) h+='<div class="muted">sudo -l: '+esc(r.sudo.slice(0,200))+'</div>';
+  if(r.hardened) h+='<div style="color:var(--green);margin-top:6px">✓ hardened: '+(r.hardened.length?r.hardened.map(esc).join("; "):"nihil")+' (reversible)</div>';
+  out.innerHTML=h;
 }
 function renderIntel(p){
   let h="";
