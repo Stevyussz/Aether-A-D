@@ -53,7 +53,9 @@ class SubmitConfig:
     endpoint: str | None = None       # http(s) URL for protocol=http
     http_method: str = "POST"
     http_body: str = "json"           # "json" | "form" | "raw"
-    flag_field: str = "flag"          # body field name carrying the flag (json/form)
+    flag_field: str = "flag"          # body field name carrying the flag (json/form); when
+                                      # batch=True this is the ARRAY field, e.g. "flags"
+    batch: bool = False               # True: send all eligible flags in ONE request
     token: str | None = None
     token_header: str | None = None   # e.g. "X-Team-Token"; sent only if both token+header set
     tcp_host: str | None = None       # for protocol=tcp
@@ -98,6 +100,27 @@ def classify_response(text: str, cfg: SubmitConfig) -> SubmissionStatus:
     return SubmissionStatus.SUBMITTED
 
 
+# Per-flag status strings used by batch JSON game servers whose response is
+# {"results":[{"flag":..,"status":".."}]}. Returns a SubmissionStatus, the sentinel "retry"
+# (leave PENDING and try again next tick), or None (unknown — caller falls back to substring).
+_BATCH_STATUS = {
+    "accepted": SubmissionStatus.ACCEPTED, "correct": SubmissionStatus.ACCEPTED,
+    "ok": SubmissionStatus.ACCEPTED, "valid": SubmissionStatus.ACCEPTED,
+    "duplicate": SubmissionStatus.ACCEPTED, "already": SubmissionStatus.ACCEPTED,
+    "own": SubmissionStatus.ACCEPTED,
+    "wrong": SubmissionStatus.REJECTED, "invalid": SubmissionStatus.REJECTED,
+    "denied": SubmissionStatus.REJECTED, "self_attack": SubmissionStatus.REJECTED,
+    "expired": SubmissionStatus.EXPIRED, "stale": SubmissionStatus.EXPIRED,
+}
+
+
+def classify_batch_status(status: str):
+    low = (status or "").strip().lower()
+    if low in ("not_started", "not started", "notstarted", "pending", ""):
+        return "retry"  # scoring window not open yet — keep PENDING, resubmit next tick
+    return _BATCH_STATUS.get(low)
+
+
 def submit_config_from(sub) -> SubmitConfig:
     """Build a SubmitConfig from a config_manager.SubmissionConfig (duck-typed), applying
     default response-classification patterns where the operator left them unset."""
@@ -106,6 +129,7 @@ def submit_config_from(sub) -> SubmitConfig:
     return SubmitConfig(
         enabled=sub.enabled, protocol=sub.protocol, endpoint=sub.endpoint,
         http_method=sub.http_method, http_body=sub.http_body, flag_field=sub.flag_field,
+        batch=getattr(sub, "batch", False),
         token=sub.token, token_header=sub.token_header,
         tcp_host=sub.tcp_host, tcp_port=sub.tcp_port, timeout=sub.timeout,
         accepted_patterns=_pat(sub.accepted_patterns, DEFAULT_ACCEPTED),
@@ -195,6 +219,62 @@ class FlagSubmitter:
             except Exception:  # noqa: BLE001
                 pass
 
+    async def _submit_batch(self, eligible: list[dict], report: SubmitReport) -> SubmitReport:
+        """Send ALL eligible flags in one request (game-API batch style) and apply the per-flag
+        result back to the inbox. A network error or an unparseable response leaves every flag
+        PENDING so the next tick retries — nothing is lost."""
+        cfg = self._cfg
+        by_value: dict[str, str] = {}
+        for r in eligible:
+            v, k = r.get("value"), r.get("dedup_key")
+            if v and k:
+                by_value.setdefault(v, k)
+        if not by_value:
+            return report
+        headers: dict[str, str] = {}
+        if cfg.token and cfg.token_header:
+            headers[cfg.token_header] = cfg.token
+        body = {cfg.flag_field: list(by_value.keys())}
+        try:
+            async with httpx.AsyncClient(timeout=cfg.timeout) as client:
+                resp = await client.request(cfg.http_method, cfg.endpoint, json=body, headers=headers)
+                text = resp.text.strip()
+                try:
+                    payload = resp.json()
+                except Exception:  # noqa: BLE001
+                    payload = None
+        except Exception as exc:  # noqa: BLE001 - leave ALL pending, retry next tick
+            report.errors.append(f"batch: {exc}")
+            log.warning("batch submission error", extra={"ctx": {"error": str(exc)}})
+            return report
+
+        results = payload.get("results") if isinstance(payload, dict) else None
+        if isinstance(results, list) and results:
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                key = by_value.get(item.get("flag"))
+                if not key:
+                    continue
+                st = item.get("status")
+                decided = classify_batch_status(st)
+                if decided == "retry":
+                    continue  # scoring not open yet — keep PENDING
+                status = decided or classify_response(str(st), cfg)
+                await self._inbox.mark_submitted(key, status)
+                report.tally(status)
+                report.results.append(FlagResult(key, status, str(st)[:200]))
+                log.info("flag submitted (batch)",
+                         extra={"ctx": {"dedup_key": key[:12] + "…", "status": status.value}})
+        else:
+            # No per-flag breakdown — classify the whole response once, apply to all sent.
+            status = classify_response(text, cfg)
+            for key in by_value.values():
+                await self._inbox.mark_submitted(key, status)
+                report.tally(status)
+                report.results.append(FlagResult(key, status, text[:200]))
+        return report
+
     async def submit_pending(self, limit: int | None = None) -> SubmitReport:
         """Submit each eligible flag to the organizer and record the outcome in the inbox.
 
@@ -211,6 +291,9 @@ class FlagSubmitter:
             eligible = eligible[:limit]
         if not eligible:
             return report
+
+        if self._cfg.protocol == "http" and self._cfg.batch:
+            return await self._submit_batch(eligible, report)
 
         client: httpx.AsyncClient | None = None
         if self._cfg.protocol == "http":

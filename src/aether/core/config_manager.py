@@ -64,9 +64,11 @@ class SubmissionConfig(BaseModel):
     endpoint: str | None = None       # http(s) URL (protocol=http)
     http_method: str = "POST"
     http_body: str = "json"           # "json" | "form" | "raw"
-    flag_field: str = "flag"
+    flag_field: str = "flag"          # body field carrying the flag; with batch=true this is the
+                                      # ARRAY field, e.g. "flags" for {"flags":[...]}
+    batch: bool = False               # true: POST ALL flags in one request (game API batch style)
     token: str | None = None
-    token_header: str | None = None   # e.g. "X-Team-Token"
+    token_header: str | None = None   # e.g. "X-Team-Token" or "Authorization" (value "Bearer <tok>")
     tcp_host: str | None = None       # protocol=tcp
     tcp_port: int | None = None
     timeout: float = 10.0
