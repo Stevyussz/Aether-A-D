@@ -77,7 +77,8 @@ Atau edit `config/aether.yaml` langsung. Yang WAJIB diisi:
 | `scope.targets` owner=`self` | IP vulnbox kita + `notes:` = path source service kita |
 | `flags.pattern` | format flag resmi (contoh `IONIC\{[^}]+\}`) |
 | `scoring.tick_seconds` | panjang 1 tick (contoh 120) |
-| `scoring.flag_id_endpoint` | URL/file flag_ids per tick (kalau ada) |
+| `scoring.flag_id_endpoint` | URL **atau path file** flag_ids per tick (kalau ada) |
+| `scoring.flag_id_headers` | token header kalau endpoint flag_id privat, mis. `{X-Team-Token: "..."}` — **tanya panitia saat TM** |
 | `submission.*` | endpoint + protokol submit flag ke panitia (lihat §5) |
 
 ```bash
