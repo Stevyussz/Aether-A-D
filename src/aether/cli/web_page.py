@@ -365,44 +365,60 @@ PAGE = r"""<!DOCTYPE html>
 
   <section id="guide" class="hide">
     <div class="card">
-      <h3>first 5 minutes (do this in order)</h3>
+      <h3>PANDUAN LANGKAH DEMI LANGKAH (ikuti urut)</h3>
       <ol class="guidelist">
-        <li><b>Defend first.</b> Everyone starts with the SAME vulnerable service. Whatever you
-          can exploit on others, they can exploit on you — so patch yourself before you attack.</li>
-        <li><b>Snapshot your service</b> and back up the flag store. Note what "normal" looks
-          like (this dashboard's Monitor tab is your baseline).</li>
-        <li><b>Fill the scope</b> (Config tab) with every target the organizer gives you:
-          opponents to attack, your own service as <i>self</i>.</li>
-        <li><b>Run one sweep</b> on an opponent (Attack tab) to confirm the toolchain works and
-          see what the vuln is.</li>
-        <li><b>Find the same bug on your own box and patch it</b> — carefully, keep the service
-          working (the scoreboard checks it).</li>
+        <li><b>STEP 0 — Dapat info dari panitia (saat warmup/brief).</b> Catat: (a) <b>token API</b>
+          kamu (<span class="mono">ad_...</span>), (b) <b>IP + akses SSH vulnbox KITA</b>
+          (<span class="mono">ssh &lt;id&gt;@host -p 2222 -i key</span>, dari portal "SSH access"),
+          (c) alamat <b>Game</b> (warmup=Game 4, final=Game 2).</li>
+        <li><b>STEP 1 — Isi Config (tab Config).</b> Flag pattern <span class="mono">IONIC\{[^}]+\}</span>;
+          scoring tick; <b>targets_endpoint</b> = <span class="mono">.../Ad/Targets</span>;
+          submission: endpoint <span class="mono">.../Ad/Submit</span>, <b>batch=true</b>,
+          token_header <span class="mono">Authorization</span>, token <span class="mono">"Bearer ad_..."</span>.
+          Edit YAML via Advanced kalau perlu. Pastikan scope enforce ON.</li>
+        <li><b>STEP 2 — DEFENDER amankan box KITA (tab Defense → "defense remote").</b> Isi SSH args
+          box kita → <b>Audit (read-only)</b>. Patch tiap temuan CRITICAL/HIGH via SSH (whitelist
+          upload, prepared statement, dll). Lalu <b>Audit + Harden</b> → cabut SUID + karantina
+          webshell (reversible). JANGAN matikan Apache/health.php/proof.php (SLA).</li>
+        <li><b>STEP 3 — ATTACKER ambil SEMUA target (tab Attack → "farm control").</b>
+          Klik <b>⟳ Sync target dari API</b> → semua lawan (status Ok) masuk scope otomatis.
+          Nyalakan <b>Auto-submit: ON</b>. Nyalakan <b>Auto-Attack Loop: ON</b> (atau klik Sweep SEMUA).</li>
+        <li><b>STEP 4 — Kalau tau PATH flag, pakai Harvester.</b> Mis. nemu LFI
+          <span class="mono">/index.php?page=/home/mahasiswa/flag.txt</span> → tempel di kotak
+          <b>Harvest paths</b> → Simpan. Tiap tick ditembak ke SEMUA lawan + auto-submit.</li>
+        <li><b>STEP 5 — Loop sampai habis.</b> Pantau tab Monitor (flag masuk, "accepted" naik) &
+          box kita (webshell asing? SLA Ok?). Attacker lihat flag, Defender jaga box. Ngobrol terus.</li>
       </ol>
     </div>
     <div class="grid">
-      <div class="card"><h3>the loop (every tick)</h3>
+      <div class="card"><h3>ritme tiap tick</h3>
         <ol class="guidelist">
-          <li>Attack: re-sweep every opponent (flags rotate each tick) → submit from Flags tab.</li>
-          <li>Defend: watch Monitor for web shells / integrity drift → quarantine, re-patch.</li>
-          <li>Never take your service DOWN — downtime loses SLA points even if unhacked.</li>
+          <li><b>Attack:</b> Auto-Attack Loop + Auto-submit ON → serang semua lawan tiap tick,
+            flag auto-submit. Cukup pantau "accepted" naik.</li>
+          <li><b>Defend:</b> pantau Monitor (webshell / file berubah) → defense remote Harden,
+            re-patch kalau ada bug baru.</li>
+          <li>Service JANGAN down — downtime = SLA jatuh walau gak kebobolan.</li>
         </ol>
       </div>
-      <div class="card"><h3>role split (2 people)</h3>
+      <div class="card"><h3>bagi peran (2 orang)</h3>
         <ul class="guidelist">
-          <li><b>You — Attack:</b> run sweeps, read flags, submit on the portal, mark submitted.</li>
-          <li><b>Teammate — Defense:</b> watch Monitor, quarantine shells, patch & keep service up.</li>
-          <li>Swap only if one side is quiet. Talk constantly.</li>
+          <li><b>Attacker:</b> Sync target → Auto-Attack Loop + Auto-submit ON → isi Harvest path
+            kalau ketemu → pantau flag.</li>
+          <li><b>Defender:</b> defense remote Audit+Harden box kita, patch via SSH, jaga SLA Ok.</li>
+          <li>Ngobrol terus. Tukeran peran kalau satu sisi sepi.</li>
         </ul>
       </div>
     </div>
-    <div class="card"><h3>golden rules</h3>
+    <div class="card"><h3>aturan emas</h3>
       <ul class="guidelist">
-        <li>A patched bug you can still exploit on others = double points. Patch, don't just block your own IP.</li>
-        <li>Don't delete the flag file or break the service to "fix" it — you lose SLA points.</li>
-        <li>Keep a copy of every exploit that worked; flags rotate, the bug usually doesn't.</li>
-        <li>AETHER reads flags but <b>never submits</b> — you paste them on the official portal.</li>
-        <li>Full strategy + command cheatsheet: <span class="mono">docs/STRATEGY.md</span> and
-          <span class="mono">docs/CHEATSHEET.md</span> in the repo.</li>
+        <li>Bug yang kamu patch TAPI masih bisa exploit ke lawan = poin ganda. Patch bug-nya,
+          jangan cuma blok IP-mu.</li>
+        <li>Jangan hapus file flag / rusak service buat "benerin" — SLA jatuh.</li>
+        <li>Simpan tiap exploit yang berhasil (Harvest path / custom script); flag ganti, bug biasanya tetap.</li>
+        <li><b>Auto-submit</b> aktif = AETHER kirim flag VALIDATED ke panitia pakai token-mu (fail-closed:
+          mati kalau submission belum diisi). Verifikasi "accepted" di log.</li>
+        <li>⚠ <b>Aturan lomba: dilarang AI selama bertanding.</b> AETHER = automation (no-AI runtime),
+          boleh. Jangan buka ChatGPT/Claude. Siapkan exploit SEBELUM lomba.</li>
       </ul>
     </div>
   </section>
