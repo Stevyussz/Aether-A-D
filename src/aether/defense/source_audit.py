@@ -86,6 +86,18 @@ _RULES: tuple[tuple[str, str, re.Pattern[str], str], ...] = (
                                        re.I),
      "Validasi upload: whitelist ekstensi/MIME, rename acak, simpan DI LUAR web-root atau matikan "
      "eksekusi skrip di folder upload (.htaccess: php_flag engine off)."),
+    # The exact CyberTech-class bug: extension filtering via a DENY-LIST (blacklist). It is
+    # bypassable (.phtml/.php5/.pht/.phar still execute under Apache) — must be a whitelist.
+    ("upload-blacklist", "CRITICAL", re.compile(
+        r"(?:\$(?:black|blacklist|deny|forbidden|banned)\w*|in_array\s*\([^)]*\b(?:php3|php4|php5|"
+        r"phtml|phar)\b|str_i?replace\s*\(\s*[\"'][^\"']*php)", re.I),
+     "Blacklist ekstensi BISA DIBYPASS (.phtml/.php5/.pht/.phar tetap jalan). Ganti ke WHITELIST "
+     "ketat: $ok=['jpg','jpeg','png','gif']; if(!in_array($ext,$ok)) tolak; cek mime_content_type "
+     "diawali 'image/'; rename acak."),
+    ("upload-ext-parse", "MEDIUM", re.compile(
+        r"(?:PATHINFO_EXTENSION|pathinfo\s*\([^)]*EXTENSION|end\s*\(\s*explode\s*\(\s*[\"']\.)", re.I),
+     "Ekstraksi ekstensi file dari nama upload: pastikan dicek lewat WHITELIST (bukan blacklist) "
+     "dan file disimpan dengan nama yang kamu tentukan, bukan nama asli dari user."),
     ("code-eval", "CRITICAL", re.compile(
         r"(?:\beval\s*\(|\bassert\s*\(|create_function\s*\(|\bexec\s*\(\s*" + _PYREQ + r")", re.I),
      "Hapus eval()/assert()/exec() atas input — tidak ada alasan sah mengeksekusi input."),

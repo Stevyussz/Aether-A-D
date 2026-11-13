@@ -37,3 +37,6 @@ docs/invest-warmup.md
 # Live competition exploits stay LOCAL (never leak to a public repo); templates stay tracked
 scripts/custom/*.py
 !scripts/custom/example_*.py
+
+# Private battle folder (strategy/playbooks) — never leak to a public repo
+tm/
