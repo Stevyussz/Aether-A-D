@@ -190,5 +190,9 @@ def test_registry_is_complete():
     assert len(NETWORK_EXPLOITS) == 3
     assert {p.identifier for p in exploits_for("redis")} == {"exploit.datastore.redis_unauth"}
     assert {p.identifier for p in exploits_for("memcached")} == {"exploit.datastore.memcached_unauth"}
-    assert len(exploits_for("vault")) == len(NETWORK_EXPLOITS)
-    assert len(exploits_for("web")) == len(MODULES)
+    # Exclude dynamically-loaded operator custom scripts (scripts/custom/*): they are a runtime
+    # addition, not part of the static registry this test validates.
+    assert len([p for p in exploits_for("vault")
+                if not p.identifier.startswith("custom.")]) == len(NETWORK_EXPLOITS)
+    assert len([p for p in exploits_for("web")
+                if not p.identifier.startswith("custom.")]) == len(MODULES)

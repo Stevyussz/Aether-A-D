@@ -113,7 +113,11 @@ def exploits_for(kind: str | None) -> list[ExploitPlugin]:
     else:
         # custom TCP / unknown non-web service: try the whole network set.
         base = [cls() for cls in NETWORK_EXPLOITS]
-    base.extend(load_custom_scripts())
+    # Operator custom scripts: only those whose supported_kinds match this target kind (a web
+    # custom script must not be listed for a redis/ssh target).
+    customs = [c for c in load_custom_scripts()
+               if not c.meta.supported_kinds or k in c.meta.supported_kinds]
+    base.extend(customs)
     return base
 
 
