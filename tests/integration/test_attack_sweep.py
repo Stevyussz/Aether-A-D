@@ -21,6 +21,7 @@ from aether.attack.exploits.web_default_creds import DefaultCredsExploit  # noqa
 from aether.attack.exploits.web_deserialization import DeserializationExploit  # noqa: E402
 from aether.attack.exploits.web_elasticsearch import ElasticsearchExploit  # noqa: E402
 from aether.attack.exploits.web_exposed_files import ExposedFilesExploit  # noqa: E402
+from aether.attack.exploits.web_harvest import HarvestExploit  # noqa: E402
 from aether.attack.exploits.web_file_upload import FileUploadExploit  # noqa: E402
 from aether.attack.exploits.web_graphql import GraphqlExploit  # noqa: E402
 from aether.attack.exploits.web_idor import IdorExploit  # noqa: E402
@@ -46,6 +47,7 @@ FLAG = "IONIC{sw33p_m3n3muk4n_flag_otomatis}"
 PATTERN = r"IONIC\{[^}]+\}"
 
 MODULES = [
+    HarvestExploit,
     ExposedFilesExploit, PathTraversalExploit, SqlInjectionExploit, CommandInjectionExploit,
     SstiExploit, FileUploadExploit, ShellshockExploit, NoSqlInjectionExploit,
     DefaultCredsExploit, IdorExploit, SsrfExploit, XxeExploit, GraphqlExploit,
@@ -80,7 +82,12 @@ async def _make_engine(tmp_path, port, enabled=ALL_VULNS):
     return orch, inbox, engine
 
 
-@pytest.mark.parametrize("module_cls", MODULES, ids=[m.__name__ for m in MODULES])
+# HarvestExploit is operator-config-driven (fetches known paths), not an autonomous vuln
+# detector, so it is covered by its own test below, not this generic-lab one.
+_AUTONOMOUS = [m for m in MODULES if m is not HarvestExploit]
+
+
+@pytest.mark.parametrize("module_cls", _AUTONOMOUS, ids=[m.__name__ for m in _AUTONOMOUS])
 async def test_each_module_extracts_real_flag(tmp_path, module_cls):
     svc = VulnLabService(FLAG, port=0).start()
     try:
@@ -100,6 +107,41 @@ async def test_each_module_extracts_real_flag(tmp_path, module_cls):
             await orch.shutdown()
     finally:
         svc.stop()
+
+
+async def test_harvest_fetches_configured_known_path(tmp_path):
+    # HarvestExploit fires operator-known flag paths at the target and extracts the flag.
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if "page=/home/mahasiswa/flag.txt" in self.path:
+                self.send_response(200); self.end_headers()
+                self.wfile.write(f"hdr\n{FLAG}\nftr".encode())
+            else:
+                self.send_response(404); self.end_headers()
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        orch, inbox, engine = await _make_engine(tmp_path, port)
+        try:
+            run = await engine.run_exploit(
+                HarvestExploit(),
+                RunContext(target_host="127.0.0.1", target_port=port, service="web",
+                           extra={"harvest_paths": ["/index.php?page=/home/mahasiswa/flag.txt"]}),
+            )
+            assert run.confirmed
+            assert any(f["value"] == FLAG for f in await inbox.list())
+        finally:
+            await orch.shutdown()
+    finally:
+        srv.shutdown()
 
 
 @pytest.mark.parametrize("module_cls", list(ISOLATED), ids=[m.__name__ for m in ISOLATED])

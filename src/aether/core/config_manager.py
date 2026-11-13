@@ -79,12 +79,22 @@ class SubmissionConfig(BaseModel):
     rejected_patterns: list[str] | None = None
 
 
+class HarvestConfig(BaseModel):
+    """Known flag paths to fetch from EVERY target each tick (the A&D exploit farm). Once you
+    know the flag-exposing request for a service, add it here and the farm harvests + submits it
+    from all opponents automatically. Placeholders {ip}/{host}/{port} are substituted per target."""
+
+    enabled: bool = True
+    paths: list[str] = Field(default_factory=list)  # e.g. "/index.php?page=/home/mahasiswa/flag.txt"
+
+
 class AetherConfig(BaseModel):
     engine: EngineConfig = Field(default_factory=EngineConfig)
     scope: ScopeConfig = Field(default_factory=ScopeConfig)
     flags: FlagConfig = Field(default_factory=FlagConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     submission: SubmissionConfig = Field(default_factory=SubmissionConfig)
+    harvest: HarvestConfig = Field(default_factory=HarvestConfig)
 
 
 class ConfigReadiness(BaseModel):

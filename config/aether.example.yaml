@@ -55,6 +55,15 @@ scoring:
 # with the briefing's real protocol. This is NOT an attack and never uses scope; it only talks
 # to the official submission endpoint. Flags are only sent if VALIDATED, and each is marked so
 # it is never submitted twice. Run it with:  aether flags submit   (or the dashboard button).
+# Known-path flag harvester — the A&D exploit farm. Once you know the flag-exposing request for
+# a service, add it here: `aether attack farm` fires it at EVERY opponent each tick, extracts the
+# flag, and auto-submits it. Placeholders {ip}/{host}/{port} are substituted per target.
+harvest:
+  enabled: true
+  paths: []
+    # - "/index.php?page=/home/mahasiswa/flag.txt"     # e.g. an LFI that exposes the round flag
+    # - "/download?file=/root/flag.txt"
+
 submission:
   enabled: false            # set true ONLY with the official endpoint below filled in
   protocol: http            # "http" (one request per flag) | "tcp" (send "<flag>\n", read reply)

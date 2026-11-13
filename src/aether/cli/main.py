@@ -445,6 +445,85 @@ def defense_audit(
     asyncio.run(_run())
 
 
+@defense_app.command("remote")
+def defense_remote(
+    ssh: str = typer.Option(..., "--ssh", help="Your SSH args to OUR box, e.g. "
+                            "'6@10.2.4.4 -p 2222 -i ~/.ssh/key'."),
+    webroot: str = typer.Option("/var/www/html", "--webroot", help="Web root to audit on the box."),
+    harden: bool = typer.Option(False, "--harden", help="OPT-IN: strip SUID from suspect binaries "
+                                "+ quarantine web shells (reversible). Default is read-only."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm prompt for --harden."),
+) -> None:
+    """SSH into OUR OWN vulnbox and audit it: source sinks + web shells + privesc (SUID/sudo/cron).
+
+    Read-only by default. With --harden it also removes SUID from non-standard binaries and
+    quarantines web shells (reversible; never touches Apache/health/proof/flag so SLA stays OK).
+    """
+    import tempfile
+
+    from ..defense.remote_audit import RemoteDefense
+
+    rd = RemoteDefense(ssh, webroot=webroot)
+    console.print(f"[cyan]▶ connecting to our box over SSH …[/]")
+    report = rd.audit(tempfile.mkdtemp(prefix="ae_remote_"))
+    if not report.connected:
+        err_console.print(f"[red]✗ SSH failed: {report.error}[/] "
+                          "[dim](check --ssh args / key perms 600 / host reachable)[/]")
+        raise typer.Exit(1)
+    console.print(f"[green]✓ connected[/] as [bold]{report.whoami}[/]")
+
+    # Source sinks
+    if report.audit:
+        colour = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow", "LOW": "cyan"}
+        table = Table(title=f"Source sinks in {webroot} — patch before opponents do")
+        table.add_column("severity"); table.add_column("category")
+        table.add_column("location"); table.add_column("fix", overflow="fold")
+        for f in report.audit:
+            loc = f"{f.path}:{f.line}" if f.line else f.path
+            table.add_row(f"[{colour.get(f.severity,'white')}]{f.severity}[/]", f.category, loc,
+                          f.remediation)
+        console.print(table)
+    else:
+        console.print("[green]✓ no obvious source sinks (still verify manually)[/]")
+
+    # Web shells
+    if report.webshells:
+        console.print(f"[red]⚠ {len(report.webshells)} web shell(s) found (possible compromise):[/]")
+        for h in report.webshells:
+            console.print(f"  [red]{h.path}[/] — {', '.join(h.signatures)}")
+    else:
+        console.print("[green]✓ no web shells in web root[/]")
+
+    # Privesc
+    if report.suspect_suid:
+        console.print(f"[red]⚠ {len(report.suspect_suid)} NON-standard SUID binary (privesc risk):[/]")
+        for b in report.suspect_suid:
+            console.print(f"  [red]{b}[/]  → cabut: chmod u-s {b}")
+    else:
+        console.print("[green]✓ no non-standard SUID binaries[/]")
+    if report.enum.get("sudo rights"):
+        console.print(f"[yellow]sudo -l:[/] {report.enum['sudo rights'][:200]}")
+
+    # Hardening (opt-in)
+    if harden:
+        actions = len(report.suspect_suid) + len(report.webshells)
+        if actions == 0:
+            console.print("[green]nothing to harden.[/]")
+            return
+        if not yes and not typer.confirm(
+                f"Apply {actions} hardening action(s) (chmod u-s + quarantine) on the box?"):
+            console.print("[yellow]skipped hardening.[/]")
+            return
+        done = rd.harden(report)
+        for d in done:
+            console.print(f"  [green]✓ {d}[/]")
+        console.print(f"[bold green]hardened: {len(done)} action(s).[/] "
+                      "[dim]Reversible: chmod u+s / rename .ae_quarantine back. Cek SLA tetap OK.[/]")
+    else:
+        console.print("[dim]Read-only. Tambah --harden untuk cabut SUID + karantina webshell "
+                      "(reversible).[/]")
+
+
 @defense_app.command("quarantine")
 def defense_quarantine(
     target: str = typer.Argument(..., help="Absolute path of the shell to quarantine."),
@@ -713,6 +792,8 @@ def attack_sweep(
             sweep = AttackSweep(eng, memory=ExploitMemory(orch.state))
             tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint, headers=cfg.scoring.flag_id_headers)
             extra = {}
+            if cfg.harvest.enabled and cfg.harvest.paths:
+                extra["harvest_paths"] = list(cfg.harvest.paths)
             if max_probes:
                 extra["max_probes"] = max_probes
             if cred:
@@ -1016,6 +1097,8 @@ def attack_loop(
         sweep = AttackSweep(eng, memory=ExploitMemory(orch.state))
         tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint, headers=cfg.scoring.flag_id_headers)
         extra = {"max_probes": max_probes} if max_probes else {}
+        if cfg.harvest.enabled and cfg.harvest.paths:
+            extra["harvest_paths"] = list(cfg.harvest.paths)
         if cred:
             extra["credentials"] = list(cred)
         start = time.time()
@@ -1080,10 +1163,12 @@ def attack_farm(
                                help="Drive heavy scanners on the FIRST round only."),
     only_healthy: bool = typer.Option(True, "--only-healthy/--all-targets",
                                       help="Attack only Ok-status opponents (skip Mumble/Offline)."),
+    concurrency: int = typer.Option(6, "--concurrency", help="How many opponents to attack in "
+                                    "PARALLEL per tick (1 = sequential)."),
 ) -> None:
     """AUTO-FARM: every tick, pull the live opponent roster from the Targets API, sweep each
-    healthy opponent with the FULL arsenal (including scripts/custom/*), and AUTO-SUBMIT captured
-    flags to the game server.
+    healthy opponent IN PARALLEL with the FULL arsenal (including scripts/custom/*), and
+    AUTO-SUBMIT captured flags to the game server.
 
     Submission stays FAIL-CLOSED: nothing is sent unless `submission.enabled=true` and an endpoint
     is configured. Without that, flags just collect in the inbox (submit manually).
@@ -1149,16 +1234,32 @@ def attack_farm(
                     orch.scope.allow(h, ports=(p,))
                 authorized = [(h, p) for h, p in live if orch.scope.check(h, p).allowed]
                 hits = 0
-                for h, p in authorized:
+                harvest_paths = (list(cfg.harvest.paths)
+                                 if cfg.harvest.enabled and cfg.harvest.paths else [])
+                sem = asyncio.Semaphore(max(1, concurrency))
+
+                async def _attack_one(h: str, p: int, _round: int = rounds) -> int:
                     svc_kind = kind_by_host.get(h, "web")
                     run_extra: dict = {}
+                    if harvest_paths:
+                        run_extra["harvest_paths"] = harvest_paths
                     fids = await tick_info.fetch_for(h, svc_kind)
                     if fids:
                         run_extra["flag_ids"] = fids
-                    report = await sweep.run(
-                        RunContext(target_host=h, target_port=p, service=svc_kind, extra=run_extra),
-                        recon=True, login=True, tools=(tools and rounds == 1))
-                    hits += len(report.flags_found)
+                    async with sem:
+                        try:
+                            rep = await sweep.run(
+                                RunContext(target_host=h, target_port=p, service=svc_kind,
+                                           extra=run_extra),
+                                recon=True, login=True, tools=(tools and _round == 1))
+                            return len(rep.flags_found)
+                        except Exception as exc:  # noqa: BLE001 - one target must never kill the tick
+                            console.print(f"[dim]  {h}:{p} error: {type(exc).__name__}[/]")
+                            return 0
+
+                # Attack all opponents in PARALLEL (bounded), flags land in the shared inbox
+                # (state writes serialize via its async lock).
+                hits = sum(await asyncio.gather(*[_attack_one(h, p) for h, p in authorized]))
                 if ok_sub:
                     rep = await submitter.submit_pending()
                     console.print(f"[green]round {rounds}:[/] {len(authorized)} target(s), "

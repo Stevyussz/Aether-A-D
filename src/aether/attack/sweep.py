@@ -28,6 +28,7 @@ from .exploits.web_elasticsearch import ElasticsearchExploit
 from .exploits.web_exposed_files import ExposedFilesExploit
 from .exploits.web_file_upload import FileUploadExploit
 from .exploits.web_graphql import GraphqlExploit
+from .exploits.web_harvest import HarvestExploit
 from .exploits.web_idor import IdorExploit
 from .exploits.web_jwt import JwtWeaknessExploit
 from .exploits.web_nosqli import NoSqlInjectionExploit
@@ -55,6 +56,7 @@ def _emit(cb: ProgressCb | None, event: dict) -> None:
 
 # Validated web (HTTP) exploits, ordered cheapest/highest-yield first.
 WEB_EXPLOITS: tuple[type[ExploitPlugin], ...] = (
+    HarvestExploit,          # operator-known flag paths first — cheapest, highest-yield when set
     ExposedFilesExploit,
     PathTraversalExploit,
     SqlInjectionExploit,
