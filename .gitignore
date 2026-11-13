@@ -32,3 +32,4 @@ config/*.secret.yaml
 
 # Operator config with real scope must never be committed
 config/aether.yaml
+docs/invest-warmup.md
