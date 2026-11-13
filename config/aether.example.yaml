@@ -43,6 +43,7 @@ scoring:
   epoch: null               # unix timestamp of tick 0 start, if known
   expiry_ticks: null        # flag validity window in ticks, if known
   flag_id_endpoint: null    # URL or local file path publishing per-tick flag_ids (if provided)
+  flag_id_headers: null     # auth headers for a private flag_id endpoint, e.g. {X-Team-Token: "abc123"}
   submit_endpoint: null     # informational mirror of submission.endpoint below
   scoreboard_endpoint: null
 

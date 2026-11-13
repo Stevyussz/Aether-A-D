@@ -11,7 +11,7 @@ from aether.core.scope_guard import ScopeGuard
 from aether.defense.backup_manager import BackupManager
 from aether.defense.patch_manager import PatchManager, PatchOutcome
 from aether.defense.patch_templates import apply_regex_patch, harden_upload_dir
-from aether.scoring.tick_info import extract_flag_ids
+from aether.scoring.tick_info import TickInfoClient, extract_flag_ids
 
 
 def test_extract_flag_ids_formats():
@@ -25,6 +25,29 @@ def test_extract_flag_ids_formats():
 
     # Format C: flat list
     assert extract_flag_ids(["f1", "f2", "f1"]) == ["f1", "f2"]
+
+
+async def test_tick_info_reads_local_file(tmp_path):
+    # Organizers sometimes drop flag_ids as a local file instead of serving HTTP.
+    import json
+    f = tmp_path / "flag_ids.json"
+    f.write_text(json.dumps({"web": {"10.60.1.1": ["acct_42", "acct_43"]}}), encoding="utf-8")
+    client = TickInfoClient(str(f))
+    assert await client.fetch_for("10.60.1.1", "web") == ["acct_42", "acct_43"]
+
+
+async def test_tick_info_missing_file_is_safe(tmp_path):
+    # A bad path must fail closed (empty), never crash the sweep.
+    client = TickInfoClient(str(tmp_path / "does_not_exist.json"))
+    assert await client.fetch_for("10.60.1.1", "web") == []
+
+
+def test_tick_info_stores_auth_headers():
+    # Private scoreboards gate the flag_id endpoint behind a team token.
+    client = TickInfoClient("https://score.ctf/flag_ids", headers={"X-Team-Token": "abc123"})
+    assert client.headers == {"X-Team-Token": "abc123"}
+    assert client._is_http()
+    assert not TickInfoClient("/mnt/flag_ids.json")._is_http()
 
 
 async def test_harden_upload_dir_and_rollback(tmp_path):

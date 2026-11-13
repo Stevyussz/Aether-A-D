@@ -411,7 +411,7 @@ class Backend:
         try:
             eng = AttackEngine(self.orch, self.inbox)
             sweep = AttackSweep(eng, memory=ExploitMemory(self.orch.state))
-            tick_info = TickInfoClient(self.cfg.scoring.flag_id_endpoint)
+            tick_info = TickInfoClient(self.cfg.scoring.flag_id_endpoint, headers=self.cfg.scoring.flag_id_headers)
             all_confirmed: list[str] = []
             total_flags = 0
             any_auth = False
@@ -667,6 +667,7 @@ class Backend:
             "scoring": {"tick_seconds": tick, "epoch": cfg.scoring.epoch,
                         "expiry_ticks": cfg.scoring.expiry_ticks,
                         "flag_id_endpoint": flag_id_ep,
+                        "flag_id_headers": cfg.scoring.flag_id_headers,
                         "submit_endpoint": cfg.scoring.submit_endpoint,
                         "scoreboard_endpoint": cfg.scoring.scoreboard_endpoint}}
         text = yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)

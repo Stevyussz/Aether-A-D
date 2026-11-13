@@ -7,6 +7,8 @@ normalizes standard JSON formats into a flat list of strings for a given ``(host
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -74,16 +76,39 @@ def extract_flag_ids(payload: Any, host: str = "", service: str = "") -> list[st
 class TickInfoClient:
     """Async client for retrieving per-tick flag IDs from the competition scoreboard API."""
 
-    def __init__(self, endpoint: str | None, timeout: float = 5.0) -> None:
+    def __init__(
+        self,
+        endpoint: str | None,
+        timeout: float = 5.0,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.endpoint = (endpoint or "").strip() or None
         self.timeout = timeout
+        # Auth headers for private scoreboards (e.g. {"X-Team-Token": "..."}). Many A&D
+        # competitions gate the flag_id endpoint behind a per-team token; without it the
+        # attacker gets zero flag_ids and targets the wrong accounts.
+        self.headers = {str(k): str(v) for k, v in (headers or {}).items()}
+
+    def _is_http(self) -> bool:
+        ep = (self.endpoint or "").lower()
+        return ep.startswith("http://") or ep.startswith("https://")
 
     async def fetch_for(self, host: str, service: str = "") -> list[str]:
         if not self.endpoint:
             return []
+        # Local file path support: some organizers drop the current tick's flag_ids as a
+        # file on the vulnbox / shared mount instead of serving an HTTP endpoint.
+        if not self._is_http():
+            try:
+                raw = Path(self.endpoint).read_text(encoding="utf-8", errors="replace")
+                data = json.loads(raw)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("tick_info file read failed", extra={"ctx": {"error": str(exc)}})
+                return []
+            return extract_flag_ids(data, host=host, service=service)
         try:
             async with httpx.AsyncClient(timeout=self.timeout, verify=False) as client:
-                resp = await client.get(self.endpoint)
+                resp = await client.get(self.endpoint, headers=self.headers or None)
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:  # noqa: BLE001

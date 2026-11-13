@@ -49,7 +49,8 @@ class ScoringConfig(BaseModel):
     expiry_ticks: int | None = None  # flag acceptance window, in ticks
     submit_endpoint: str | None = None  # informational only — operator submits manually
     scoreboard_endpoint: str | None = None
-    flag_id_endpoint: str | None = None  # organizer endpoint publishing per-tick flag IDs
+    flag_id_endpoint: str | None = None  # organizer endpoint (URL) or local file path for per-tick flag IDs
+    flag_id_headers: dict[str, str] | None = None  # auth headers for a private flag_id endpoint
 
 
 class SubmissionConfig(BaseModel):

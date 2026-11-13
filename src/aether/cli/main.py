@@ -711,7 +711,7 @@ def attack_sweep(
             inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
             eng = AttackEngine(orch, inbox)
             sweep = AttackSweep(eng, memory=ExploitMemory(orch.state))
-            tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint)
+            tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint, headers=cfg.scoring.flag_id_headers)
             extra = {}
             if max_probes:
                 extra["max_probes"] = max_probes
@@ -1014,7 +1014,7 @@ def attack_loop(
         inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
         eng = AttackEngine(orch, inbox)
         sweep = AttackSweep(eng, memory=ExploitMemory(orch.state))
-        tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint)
+        tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint, headers=cfg.scoring.flag_id_headers)
         extra = {"max_probes": max_probes} if max_probes else {}
         if cred:
             extra["credentials"] = list(cred)
