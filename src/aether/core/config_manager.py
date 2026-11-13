@@ -51,6 +51,7 @@ class ScoringConfig(BaseModel):
     scoreboard_endpoint: str | None = None
     flag_id_endpoint: str | None = None  # organizer endpoint (URL) or local file path for per-tick flag IDs
     flag_id_headers: dict[str, str] | None = None  # auth headers for a private flag_id endpoint
+    targets_endpoint: str | None = None  # game Targets API (returns live opponent IP:port roster)
 
 
 class SubmissionConfig(BaseModel):

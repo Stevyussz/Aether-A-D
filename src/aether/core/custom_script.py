@@ -8,27 +8,22 @@ deduplication, and manual inbox tracking.
 from __future__ import annotations
 
 import importlib.util
-from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
+from ..attack.exploits.base import ExploitMeta, ExploitPlugin
 from .models import ModuleResult, TaskState
-from .plugin import Module, ModuleMeta, RunContext
+from .plugin import ModuleMeta, RunContext
 
 
-@dataclass(frozen=True)
-class _ScriptMeta:
-    prerequisites: tuple[str, ...] = ("authorized target",)
-    expected_result: str = "flag string from custom service flow"
-    verification: str = "matches configured flag pattern"
-    validated: bool = True
-    research_only: bool = False
-    reference: str = "operator custom script"
+class CustomScriptPlugin(ExploitPlugin):
+    """Wraps a Python script defining `async def check_target(host, port, flag_ids, client)`.
 
-
-class CustomScriptPlugin(Module):
-    """Wraps a Python script defining `async def check_target(host, port, flag_ids, client)`."""
+    It is a first-class ExploitPlugin so the normal attack engine (prerequisites, scope, flag
+    extraction) runs it exactly like a built-in exploit — which is what the sweep / farm loop
+    invokes it through.
+    """
 
     meta = ModuleMeta(
         identifier="custom.script._base",
@@ -37,7 +32,14 @@ class CustomScriptPlugin(Module):
         category="exploit",
         timeout=25.0,
     )
-    exploit = _ScriptMeta()
+    exploit = ExploitMeta(
+        prerequisites=("authorized target",),
+        expected_result="flag string from custom service flow",
+        verification="matches configured flag pattern",
+        validated=True,
+        research_only=False,
+        reference="operator custom script",
+    )
 
     def __init__(self, script_path: str | Path) -> None:
         self.script_path = Path(script_path)

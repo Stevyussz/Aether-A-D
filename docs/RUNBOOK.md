@@ -66,7 +66,7 @@ intentional. Do not set `scope.enforce: false` during the competition.
 .venv/bin/aether attack sweep <opponent-host>  # smart by default: crawls first, then aims
 .venv/bin/aether attack sweep                   # omit host = sweep ALL in-scope opponents
 .venv/bin/aether attack sweep <host> --no-recon # skip the crawl (blind wordlists only)
-.venv/bin/aether attack sweep <host> --tools    # ALSO drive nmap/rustscan/gobuster/ffuf/whatweb
+.venv/bin/aether attack sweep <host> --tools   :W # ALSO drive nmap/rustscan/gobuster/ffuf/whatweb
 #   --tools widens the surface: discovers extra open ports/services (so you notice a second web
 #   or data-store port), extra endpoints (gobuster/ffuf), and the tech stack (whatweb), then
 #   feeds all of it into the exploit arsenal. Needs those tools on PATH; degrades gracefully.

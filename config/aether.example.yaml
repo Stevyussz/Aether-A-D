@@ -44,6 +44,9 @@ scoring:
   expiry_ticks: null        # flag validity window in ticks, if known
   flag_id_endpoint: null    # URL or local file path publishing per-tick flag_ids (if provided)
   flag_id_headers: null     # auth headers for a private flag_id endpoint, e.g. {X-Team-Token: "abc123"}
+  targets_endpoint: null    # game Targets API (live opponent IP:port roster), e.g.
+                            #   https://finals.tccpens.id/api/Game/2/Ad/Targets
+                            # `aether attack farm` polls it each tick; auth reuses submission.token
   submit_endpoint: null     # informational mirror of submission.endpoint below
   scoreboard_endpoint: null
 
@@ -59,9 +62,11 @@ submission:
   endpoint: null            # e.g. http://10.10.0.1/api/submit  (official game server URL)
   http_method: POST
   http_body: json           # "json" {flag_field: "<flag>"} | "form" | "raw" (flag as body)
-  flag_field: flag          # body field name carrying the flag
-  token: null               # team/submission token, if the organizer requires one
-  token_header: null        # header to carry the token, e.g. X-Team-Token
+  flag_field: flag          # body field; with batch=true this is the ARRAY field, e.g. "flags"
+  batch: false              # true: POST ALL flags in ONE request {flag_field:[...]} (game-API style),
+                            #       and read per-flag status from the JSON "results" array
+  token: null               # team/submission token; for Bearer APIs set "Bearer <your-token>"
+  token_header: null        # header to carry the token, e.g. X-Team-Token  or  Authorization
   # --- tcp protocol (classic line submitter) ---
   tcp_host: null            # e.g. 10.10.0.1
   tcp_port: null            # e.g. 31337

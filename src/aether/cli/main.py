@@ -1064,10 +1064,124 @@ def attack_loop(
 
 @attack_app.command("stop")
 def attack_stop() -> None:
-    """Signal a running `attack loop` to stop at its next round."""
+    """Signal a running `attack loop`/`attack farm` to stop at its next round."""
     Path("runtime").mkdir(exist_ok=True)
     _ATTACK_STOP_FLAG.write_text("stop", encoding="utf-8")
     console.print("[green]✓ stop signal written (runtime/attack.stop)[/]")
+
+
+@attack_app.command("farm")
+def attack_farm(
+    config: str = typer.Option("config/aether.yaml", "--config", "-c"),
+    interval: float = typer.Option(60.0, "--interval", help="Seconds between ticks."),
+    duration: float = typer.Option(0.0, "--duration",
+                                   help="Total run seconds (0 = forever, until Ctrl-C / attack stop)."),
+    tools: bool = typer.Option(False, "--tools/--no-tools",
+                               help="Drive heavy scanners on the FIRST round only."),
+    only_healthy: bool = typer.Option(True, "--only-healthy/--all-targets",
+                                      help="Attack only Ok-status opponents (skip Mumble/Offline)."),
+) -> None:
+    """AUTO-FARM: every tick, pull the live opponent roster from the Targets API, sweep each
+    healthy opponent with the FULL arsenal (including scripts/custom/*), and AUTO-SUBMIT captured
+    flags to the game server.
+
+    Submission stays FAIL-CLOSED: nothing is sent unless `submission.enabled=true` and an endpoint
+    is configured. Without that, flags just collect in the inbox (submit manually).
+    """
+    import asyncio
+    import time
+
+    try:
+        cfg, _ = load_cli_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]✗ {exc}[/]")
+        raise typer.Exit(1)
+
+    from ..attack.engine import AttackEngine
+    from ..attack.flags.inbox import FlagInbox
+    from ..attack.flags.validator import FlagValidator
+    from ..attack.memory import ExploitMemory
+    from ..attack.sweep import AttackSweep
+    from ..core.orchestrator import Orchestrator
+    from ..core.plugin import RunContext
+    from ..scoring.submitter import FlagSubmitter, submit_config_from
+    from ..scoring.targets_sync import TargetsClient
+    from ..scoring.tick_info import TickInfoClient
+
+    sub = cfg.submission
+    tcli = TargetsClient(cfg.scoring.targets_endpoint, token=sub.token,
+                         token_header=sub.token_header or "Authorization")
+    sub_cfg = submit_config_from(sub)
+    ok_sub, sub_reason = sub_cfg.ready()
+
+    static_opp = [(t.host, p) for t in cfg.scope.targets if t.owner == "opponent"
+                  for p in (t.ports if t.ports else (80,))]
+    if not cfg.scoring.targets_endpoint and not static_opp:
+        err_console.print("[red]✗ no targets: set scoring.targets_endpoint or scope opponents.[/]")
+        raise typer.Exit(1)
+
+    Path("runtime").mkdir(exist_ok=True)
+    if _ATTACK_STOP_FLAG.exists():
+        _ATTACK_STOP_FLAG.unlink()
+
+    async def _run():
+        orch = Orchestrator(cfg)
+        await orch.start()
+        inbox = FlagInbox(orch.state, FlagValidator(cfg.flags.pattern), events=orch.events)
+        eng = AttackEngine(orch, inbox)
+        sweep = AttackSweep(eng, memory=ExploitMemory(orch.state))
+        submitter = FlagSubmitter(inbox, sub_cfg)
+        tick_info = TickInfoClient(cfg.scoring.flag_id_endpoint, headers=cfg.scoring.flag_id_headers)
+        kind_by_host = {t.host: t.kind for t in cfg.scope.targets}
+        if not ok_sub:
+            console.print(f"[yellow]⚠ auto-submit OFF ({sub_reason}) — flags stay in inbox, "
+                          "submit manually with `aether flags submit`[/]")
+        start = time.time()
+        rounds = 0
+        try:
+            while True:
+                rounds += 1
+                fetched = await tcli.fetch()
+                if only_healthy:
+                    fetched = [t for t in fetched if t.healthy]
+                live = list(dict.fromkeys((t.host, t.port) for t in fetched)) or static_opp
+                for h, p in live:
+                    orch.scope.allow(h, ports=(p,))
+                authorized = [(h, p) for h, p in live if orch.scope.check(h, p).allowed]
+                hits = 0
+                for h, p in authorized:
+                    svc_kind = kind_by_host.get(h, "web")
+                    run_extra: dict = {}
+                    fids = await tick_info.fetch_for(h, svc_kind)
+                    if fids:
+                        run_extra["flag_ids"] = fids
+                    report = await sweep.run(
+                        RunContext(target_host=h, target_port=p, service=svc_kind, extra=run_extra),
+                        recon=True, login=True, tools=(tools and rounds == 1))
+                    hits += len(report.flags_found)
+                if ok_sub:
+                    rep = await submitter.submit_pending()
+                    console.print(f"[green]round {rounds}:[/] {len(authorized)} target(s), "
+                                  f"{hits} flag hit(s) · submit → {rep.summary()}")
+                else:
+                    total = len(await inbox.list())
+                    console.print(f"[cyan]round {rounds}:[/] {len(authorized)} target(s), "
+                                  f"{hits} flag hit(s), {total} in inbox (manual submit)")
+                if duration and (time.time() - start) >= duration:
+                    break
+                if _ATTACK_STOP_FLAG.exists():
+                    console.print("[yellow]stop flag detected — shutting down[/]")
+                    _ATTACK_STOP_FLAG.unlink()
+                    break
+                await asyncio.sleep(interval)
+        finally:
+            await orch.shutdown()
+        console.print(f"farm finished after {rounds} round(s).")
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]farm interrupted by operator[/]")
 
 
 @attack_app.command("oast")
