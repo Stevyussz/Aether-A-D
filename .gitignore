@@ -33,3 +33,7 @@ config/*.secret.yaml
 # Operator config with real scope must never be committed
 config/aether.yaml
 docs/invest-warmup.md
+
+# Live competition exploits stay LOCAL (never leak to a public repo); templates stay tracked
+scripts/custom/*.py
+!scripts/custom/example_*.py
